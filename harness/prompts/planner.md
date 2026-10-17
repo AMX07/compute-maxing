@@ -12,6 +12,8 @@ Hard rules (edits that break them are rejected before running):
 - Training must finish within the time budget, and sampling 16 images must take under 2 minutes.
 - The time accounting in the training loop must stay honest: don't exclude more steps from the budget.
 
+A fact about the metric: the current training loss already matches it exactly (t sampled uniformly, unweighted MSE on the velocity). Re-weighting or re-sampling timesteps (logit-normal, min-SNR, curricula) shifts effort away from what val_loss measures, so it tends to raise val_loss even when samples look better. Try at most one such idea, and only with a specific argument for why it would help this metric.
+
 How to choose:
 - Read the experiment log and the playbook. Don't repeat an idea that was already tried unless you change it materially and say why.
 - Prefer ideas with a clear mechanism for lowering val_loss within 2 minutes: learning rate and schedule, batch size vs throughput, model shape (width/depth/patch size/heads), optimizer, precision, normalization and initialization, conditioning.
@@ -27,7 +29,8 @@ Reply in exactly this format:
   "description": "one line for the results log, <= 80 characters",
   "rationale": "2-3 sentences: the mechanism, and why it should lower val_loss in a 2-minute run",
   "prediction": {"delta_pct": -1.0, "confidence": "low|medium|high", "risk": "what could go wrong"},
-  "sources": ["optional URLs of papers or code this comes from"]
+  "sources": ["optional URLs of papers or code this comes from"],
+  "idea_id": "the idea bank id you implemented (e.g. I3), or null"
 }
 ```
 

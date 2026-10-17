@@ -25,6 +25,11 @@ import time
 
 from harness import llm
 
+try:  # the idea bank is optional: a broken researcher must never stop an experiment
+    from harness import researcher
+except Exception:  # noqa: BLE001
+    researcher = None
+
 ROOT = llm.ROOT
 MEM = os.path.join(ROOT, "harness", "memory")
 STATE = os.path.join(MEM, "state.json")
@@ -321,11 +326,40 @@ def experiment_log(state):
     return "\n".join(lines)
 
 
+def idea_bank_text(limit=6):
+    """Untried cards from the background researcher (harness/memory/ideas.jsonl), or None."""
+    try:
+        ideas = researcher.untried()[:limit] if researcher else []
+    except Exception as e:  # noqa: BLE001
+        log(f"idea bank unreadable: {e}")
+        return None
+    if not ideas:
+        return None
+    lines = [f"- {c.get('id')} [{c.get('category')}, mlx_risk {c.get('mlx_risk')}] {c.get('title')}: {c.get('change')} "
+             f"Why: {c.get('mechanism')} Sources: {', '.join(c.get('sources') or []) or 'model knowledge only (weaker)'}"
+             for c in ideas]
+    return ("## Idea bank (from a background literature search; suggestions only, check them against train.py)\n\n"
+            + "\n".join(lines) + '\n\nYou may implement one of these (set "idea_id" in your JSON) or propose your own '
+            '("idea_id": null).')
+
+
+def mark_idea(meta, n, status, val_loss):
+    iid = meta.get("idea_id")
+    if not iid or not researcher:
+        return
+    try:
+        if iid in {c.get("id") for c in researcher.load_bank()}:
+            researcher.mark(iid, status="tried", exp=n, outcome=status, val_loss=val_loss)
+    except Exception as e:  # noqa: BLE001
+        log(f"could not mark idea {iid}: {e}")
+
+
 def planner_messages(state, src, lessons, n):
     parts = [
         f"## Research brief (program.md, written for coding agents; the harness now does the git/run/log steps)\n\n"
         f"{read(os.path.join(ROOT, 'program.md'))}",
         f"## Playbook: lessons so far\n\n{render_playbook(lessons)}",
+        idea_bank_text(),
         f"## Experiment log (results.tsv; 'vs best before' is the change against the best kept val_loss at that time)\n\n"
         f"{experiment_log(state)}\n\nCurrent best val_loss: {state['best_val_loss']}",
     ]
@@ -334,6 +368,7 @@ def planner_messages(state, src, lessons, n):
         cats = sorted({h.get("category", "?") for h in recent})
         parts.append(f"## Note\n\nThe last {state['consecutive_discards']} experiments were all discarded or crashed "
                      f"(categories: {', '.join(cats)}). Pick a different category or a bolder idea this time.")
+    parts = [p for p in parts if p]
     parts.append(f"## Current train.py (the best version so far)\n\n```python\n{src}\n```")
     parts.append(f"Propose experiment #{n}. Follow the reply format exactly.")
     return [{"role": "system", "content": read(os.path.join(PROMPTS, "planner.md"))},
@@ -533,6 +568,7 @@ def main():
         outcome["error_tail"] = res["tail"][-1500:]
     finish_artifacts(res, meta, outcome, parent, exp_commit)
     append_result(exp_commit, res["val_loss"], res["memory_gb"], status, res["run_id"], desc)
+    mark_idea(meta, n, status, res["val_loss"])
 
     set_status("reflecting", n, meta.get("title"))
     try:
@@ -545,6 +581,7 @@ def main():
         log(f"reflector failed: {e}")
 
     state["history"].append({"n": n, "title": meta.get("title"), "category": meta.get("category"), "status": status,
+                             "idea_id": meta.get("idea_id"),
                              "val_loss": res["val_loss"], "prediction_pct": pred.get("delta_pct"),
                              "actual_pct": round(actual_pct, 3) if actual_pct is not None else None,
                              "run_id": res["run_id"], "commit": exp_commit[:7],
