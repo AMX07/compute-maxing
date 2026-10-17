@@ -51,6 +51,7 @@ Each experiment runs in a fresh process, and all state lives in files. A crash c
 4. **Decide:** code decides, not the model. The change is kept if val_loss beats the best so far; otherwise `train.py` is reverted with a new commit. History only moves forward, so discarded ideas stay in git.
 5. **Log:** the row is appended to `results.tsv`, and `idea.json` (idea, prediction, outcome) and `change.diff` are written into `runs/<run_id>/` for the web UI.
 6. **Reflect:** the reflector (`prompts/reflector.md`) reads the diff that ran, checks it against the planner's `self_check`, and compares the prediction with the outcome. If the code didn't implement the idea, it records a lesson about the bug rather than the idea. It makes at most 3 itemized changes to the playbook (`memory/playbook.json`, also rendered as `playbook.md`), and code merges them.
+7. **Map:** `map_architecture.py` adds the experiment to `architecture.json` (below). Both designs do this step, because it lives in the shared `step.record()`.
 
 ## Models and thinking (`harness/config.json`)
 
@@ -88,7 +89,20 @@ From experiment 3 to 13, a separate reviewer model checked every diff before it 
 | `workspaces/<d>/memory/state.json` | Best commit and val_loss, and every idea with its prediction and outcome | yes |
 | `workspaces/fixed/memory/playbook.json`, `playbook.md` | Lessons learned (fixed design) | yes |
 | `workspaces/agentic/memory/notes.md`, `agents/` | The orchestrator's notes, and every sub-agent's role, task and reply (agentic design) | yes |
+| `workspaces/<d>/architecture.json` | The component map the web UI draws, maintained by `map_architecture.py` | yes |
 | `workspaces/<d>/traces/` | Every LLM call (prompt, reply, timing, usage), the live status file, and loop logs | no |
+
+## Architecture map (`harness/map_architecture.py`)
+
+`architecture.json` in the workspace is the component map that the web UI's Baseline, Evolution and Current views draw. Its schema is in `webui/README.md`. The harness keeps it up to date: after the baseline and after every experiment, `step.py` runs
+
+```bash
+python3 harness/map_architecture.py --workspace workspaces/fixed
+```
+
+It reads the baseline `train.py` (the baseline run's copy, else the root `train.py`), `results.tsv`, each run's `idea.json` and `change.diff`, and `memory/` (`state.json`, `playbook.json`, `ideas.jsonl`). The first run asks for the baseline's components, once. Then each experiment not yet in `changes` gets one small call (`prompts/mapper.md`, on the reflector's model) that returns the component it changed (label, after, cost, note), updates to the hypotheses it tested, and the component each new queued idea would change. With nothing new, it makes no call. A failed or timed-out call never costs an experiment: whatever is missing is mapped on the next run. `--dry-run` prints the merged map without writing it.
+
+Merging only adds, so a hand-written map keeps everything a human wrote. Components, groups, `changes` and `next` only get missing keys, and `tried` only grows. An existing hypothesis keeps its text, its evidence only grows, and its status changes only together with new evidence. Hypotheses the script writes are marked `"auto": true`, and only those can be reworded later. If a merge would drop or rewrite an existing entry, the script refuses to write it.
 
 ## Researcher (`harness/researcher.py`)
 
