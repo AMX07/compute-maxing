@@ -22,7 +22,25 @@ const S = {
   agentsRaw: "", agents: null,           // agents page state
   detail: null,                          // agents page right pane: {kind: "prompt"|"trace", key}
   diffs: new Map(), timer: null, error: null,
+  ui: { chart: true, side: true },       // which project panels are open (remembered per browser)
 };
+try { Object.assign(S.ui, JSON.parse(localStorage.getItem("ar-ui") || "{}")); } catch (e) {}
+
+const CHEVRON = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+// Opens or minimizes the loss chart or the side panel.
+function setPanel(name, open) {
+  S.ui[name] = open;
+  try { localStorage.setItem("ar-ui", JSON.stringify(S.ui)); } catch (e) {}
+  const app = $("#app");
+  app.classList.toggle("chart-min", !S.ui.chart);
+  app.classList.toggle("side-min", !S.ui.side);
+  $$("[data-toggle]").forEach((b) => {
+    const on = S.ui[b.dataset.toggle];
+    b.setAttribute("aria-expanded", String(on));
+    b.title = (on ? "Minimize the " : "Show the ") + (b.dataset.toggle === "chart" ? "loss chart" : "side panel");
+  });
+}
 
 // ------------------------------------------------------------------ formatting
 
@@ -73,6 +91,7 @@ const projHref = (pid, view, sel) => `#/p/${pid}/${view || "evolution"}` + (sel 
 function select(sel) {
   if (S.route.page !== "project") return;
   S.route.sel = sel || null;
+  if (sel && !S.ui.side) setPanel("side", true);  // a selection is read in the side panel
   history.replaceState(null, "", projHref(S.pid, S.route.view, S.route.sel));
   renderArch(); renderSide(); renderChart();
 }
@@ -106,10 +125,10 @@ async function poll(open) {
     S.error = null;
     const data = JSON.parse(raw);
     if (unclocked(raw) !== S.raw) {
-      S.raw = unclocked(raw);
       S.data = data;
       S.m = buildModel(S.data);
       if (S.route.page === "project") { renderArch(); renderSide(); renderChart(); }
+      S.raw = unclocked(raw);  // only after a successful draw, so a failed one is retried on the next poll
     } else S.data.server_time = data.server_time;
     if (S.route.page === "agents") {
       const a = await (await fetch(`/api/p/${S.pid}/agents`, { cache: "no-store" })).text();
@@ -264,14 +283,21 @@ function renderShell() {
     <main class="proj">
       <section class="canvas panel">
         <div class="arch" id="arch"></div>
-        <div class="chart-wrap"><div class="chart" id="chart"></div></div>
+        <div class="chart-wrap">
+          <button type="button" class="panel-head" data-toggle="chart"><span class="tag" id="chart-label">loss</span><span class="caret">${CHEVRON}</span></button>
+          <div class="chart" id="chart"></div>
+        </div>
       </section>
-      <aside class="side panel" id="side" aria-live="polite"></aside>
+      <aside class="side panel" id="side">
+        <div class="side-head"><span id="side-label"></span>
+          <button type="button" class="caret-btn" data-toggle="side">${CHEVRON}</button></div>
+        <div class="side-body" id="side-body" aria-live="polite"></div>
+      </aside>
     </main>`}`;
   renderHeader();
   // Switching pages within a project keeps the loaded state, so draw it now rather than on the next change.
   if (agents) renderAgents();
-  else { renderArch(); renderSide(); new ResizeObserver(() => renderChart()).observe($("#chart")); }
+  else { setPanel("chart", S.ui.chart); setPanel("side", S.ui.side); renderArch(); renderSide(); new ResizeObserver(() => renderChart()).observe($("#chart")); }
 }
 
 function agentStatus() {
@@ -291,24 +317,20 @@ function agentStatus() {
 function renderHeader() {
   const el = $("#bar");
   if (!el) return;
-  const d = S.data, m = S.m, s = d && d.summary;
-  const p = s && s.best_val_loss != null && s.baseline_val_loss ? ((s.best_val_loss - s.baseline_val_loss) / s.baseline_val_loss) * 100 : null;
+  // Just the project name; the path and the agent's status are in its tooltip, and a dot shows only while it runs.
+  const d = S.data;
   const st = S.error ? { text: S.error, cls: "bad" } : agentStatus();
   const view = S.route.view || "evolution";
   el.innerHTML = `
     <a class="home-link" href="#/" title="All projects">${GLYPH}</a>
-    <div class="ptitle"><b>${esc(d ? d.name : "…")}</b><span class="mono">${esc(shortPath(d && d.root))}</span></div>
-    ${s ? `<div class="kpi mono" title="${esc(metricName((m && m.arch) || {}))}: baseline → best">${fmtLoss(s.baseline_val_loss)}<span class="arrow">→</span><b>${fmtLoss(s.best_val_loss)}</b>
-      <span class="${tone(p)}">${fmtPct(p)}</span></div>
-      <div class="counts">${s.total} runs · ${s.counts.keep || 0} kept</div>` : ""}
-    <div class="status ${st.cls}" title="${esc(st.text)}"><span class="dot"></span><span>${esc(st.text)}</span></div>
-    <nav class="seg" aria-label="Page">
+    <h1 class="ptitle status ${st.cls}" title="${esc(shortPath(d && d.root))}\n${esc(st.text)}">${st.cls ? `<span class="dot"></span>` : ""}${esc(d ? d.name : "…")}</h1>
+    <div class="bar-end"><nav class="seg" aria-label="Page">
       <a href="${projHref(S.pid, view)}" class="${S.route.page === "project" ? "on" : ""}">Architecture</a>
       <a href="#/p/${S.pid}/agents" class="${S.route.page === "agents" ? "on" : ""}">Agents</a>
     </nav>
     <button type="button" class="icon-btn" id="theme" title="Light or dark (T)" aria-label="Toggle theme">
       <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10 2.75a7.25 7.25 0 0 1 0 14.5z" fill="currentColor"/></svg>
-    </button>`;
+    </button></div>`;
   $("#theme").onclick = toggleTheme;
 }
 
@@ -469,9 +491,11 @@ function showTip(target) {
 // ------------------------------------------------------------------ side panel
 
 function renderSide() {
-  const el = $("#side");
+  const el = $("#side-body");
   if (!el || !S.m) return;
   const sel = S.route.sel, m = S.m;
+  $("#side-label").innerHTML = sel ? backBtn : `<span class="tag">Overview</span>`;
+  $("#chart-label").textContent = metricName(m.arch) + " by experiment";
   let html;
   if (sel && sel.startsWith("e")) html = expDetail(m.exps.find((e) => "e" + e.n === sel));
   else if (sel && sel.startsWith("c:")) html = compDetail(m.byId.get(sel.slice(2)));
@@ -517,7 +541,7 @@ function lessonHtml(text) {
 function expDetail(e) {
   if (!e) return null;
   if (e.n === 0) {
-    return `${backBtn}<div class="d-head"><span class="tag">#0</span><span class="pill keep">baseline</span></div>
+    return `<div class="d-head"><span class="tag">#0</span><span class="pill keep">baseline</span></div>
       <h3>Baseline</h3>${metricsRow(e)}${samplesFig(e)}
       <div class="sec"><h4>Components</h4><ul class="ideas">${S.m.comps.map((c) =>
         `<li><button type="button" data-sel="c:${esc(c.id)}">${esc(c.name)}</button><span class="muted">${esc(c.baseline.label || "")}</span></li>`).join("")}</ul></div>`;
@@ -526,7 +550,7 @@ function expDetail(e) {
   const actual = out.delta_pct ?? e.pct;
   const diffUrl = e.files["change.diff"];
   const lessons = ((S.data.harness && S.data.harness.lessons) || []).filter((l) => new RegExp(`\\bexps? [\\d,\\s]*\\b${e.n}\\b`).test(l.text));
-  return `${backBtn}
+  return `
     <div class="d-head"><span class="tag">#${e.n}</span><span class="pill ${esc(e.status)}">${esc(STATUS[e.status] || e.status)}</span>
       ${e.comp ? `<button type="button" class="chip" data-sel="c:${esc(e.comp.id)}">${esc(e.comp.name)}</button>` : ""}</div>
     <h3>${esc(e.label)}</h3>
@@ -563,7 +587,7 @@ const samplesFig = (e) => (e.files && e.files["samples.png"] ? `<figure class="s
 function compDetail(c) {
   if (!c) return null;
   const b = c.baseline || {};
-  return `${backBtn}<div class="d-head"><span class="tag">component</span>${c.current ? `<span class="pill keep">changed</span>` : `<span class="pill">unchanged</span>`}</div>
+  return `<div class="d-head"><span class="tag">component</span>${c.current ? `<span class="pill keep">changed</span>` : `<span class="pill">unchanged</span>`}</div>
     <h3>${esc(c.name)}</h3>
     <div class="sec"><h4>Baseline</h4><p><b>${esc(b.label || "baseline")}</b></p>${b.detail ? `<p>${esc(b.detail)}</p>` : ""}
       ${b.cost || b.params ? `<p class="cost mono">${esc([b.cost, b.params && "params " + b.params].filter(Boolean).join(" · "))}</p>` : ""}</div>
@@ -578,7 +602,7 @@ function compDetail(c) {
 function ideaDetail(i) {
   if (!i) return null;
   const links = (i.sources || []).map(safeUrl).filter(Boolean);
-  return `${backBtn}<div class="d-head"><span class="tag">${esc(i.id)}</span><span class="pill next">queued</span>
+  return `<div class="d-head"><span class="tag">${esc(i.id)}</span><span class="pill next">queued</span>
       ${i.comp ? `<button type="button" class="chip" data-sel="c:${esc(i.comp.id)}">${esc(i.comp.name)}</button>` : ""}</div>
     <h3>${esc(i.title)}</h3>
     ${i.change ? `<div class="sec"><h4>Change</h4><p>${esc(i.change)}</p></div>` : ""}
@@ -708,6 +732,8 @@ function toggleTheme() {
 
 document.addEventListener("click", (e) => {
   const t = e.target;
+  const tg = t.closest("[data-toggle]");
+  if (tg) { setPanel(tg.dataset.toggle, !S.ui[tg.dataset.toggle]); return; }
   const selEl = t.closest("[data-sel]");
   if (selEl && S.route.page === "project" && !t.closest("a")) {
     const sel = selEl.dataset.sel;
