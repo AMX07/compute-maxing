@@ -39,15 +39,15 @@
     },
     {
       "id": "L7",
-      "text": "Removing warmup (constant LR) regresses val_loss ~0.7% vs baseline; warmup is protective in short runs (exp 6)",
+      "text": "Removing warmup regresses val_loss ~0.7% (exp 6) and ~0.45% with beta2=0.95 (exp 8); warmup is protective regardless of optimizer adaptation (exp 6, 8)",
       "since": 6,
-      "updated": 6
+      "updated": 8
     },
     {
       "id": "L8",
-      "text": "Lowering AdamW beta2 from 0.99 to 0.95 gives negligible val_loss change (-0.06%), not the predicted -0.8%; optimizer adaptation is not a bottleneck (exp 7)",
+      "text": "Lowering AdamW beta2 from 0.99 to 0.95 gives negligible val_loss change (-0.06%) and does not enable warmup removal (exp 7, 8)",
       "since": 7,
-      "updated": 7
+      "updated": 8
     }
   ]
 }

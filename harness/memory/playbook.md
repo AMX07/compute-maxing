@@ -8,5 +8,5 @@ Lessons the loop has learned, maintained by the reflector.
 - [L4] Warmdown shape is not a lever (cosine vs linear within noise), but warmup removal hurts ~0.7%; keep warmup (exp 3, 6)
 - [L5] EMA implementation crashed: lazy arrays without mx.eval per step caused memory growth, and model.update(ema_state) failed due to parameter name mismatch (exp 4)
 - [L6] Removing text encoder for learned embedding improves val_loss ~0.5% via +12% steps; conditioning quality loss is minor on CIFAR-10 (exp 5)
-- [L7] Removing warmup (constant LR) regresses val_loss ~0.7% vs baseline; warmup is protective in short runs (exp 6)
-- [L8] Lowering AdamW beta2 from 0.99 to 0.95 gives negligible val_loss change (-0.06%), not the predicted -0.8%; optimizer adaptation is not a bottleneck (exp 7)
+- [L7] Removing warmup regresses val_loss ~0.7% (exp 6) and ~0.45% with beta2=0.95 (exp 8); warmup is protective regardless of optimizer adaptation (exp 6, 8)
+- [L8] Lowering AdamW beta2 from 0.99 to 0.95 gives negligible val_loss change (-0.06%) and does not enable warmup removal (exp 7, 8)
