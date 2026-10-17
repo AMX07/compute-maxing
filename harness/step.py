@@ -84,6 +84,44 @@ def commit(message, paths):
     return git("rev-parse", "HEAD")
 
 
+def secret_values():
+    """Values that must never leave this machine: the API keys from .env/the environment."""
+    vals = []
+    try:
+        vals.append(llm.config()["CRUSOE_API_KEY"])
+    except SystemExit:
+        pass
+    llm.load_env()
+    vals += [os.environ.get(k, "") for k in ("YDC_API_KEY",)]
+    return [v for v in vals if len(v) >= 8]
+
+
+def push_safely():
+    """Push main to origin so GitHub shows the experiment history live. Refuses if the outgoing commits touch .env
+    or any git-ignored path, or contain a secret value. Never raises and never force-pushes."""
+    try:
+        if not git("remote", check=False):
+            return
+        upstream = git("rev-parse", "--verify", "-q", "origin/main", check=False) or None
+        rng = f"{upstream}..HEAD" if upstream else "HEAD"
+        files = [f for f in git("log", rng, "--name-only", "--format=", check=False).splitlines() if f.strip()]
+        if not files and upstream:
+            return  # nothing new
+        bad = [f for f in set(files) if os.path.basename(f) == ".env" or
+               subprocess.run(["git", "check-ignore", "--no-index", "-q", f], cwd=ROOT).returncode == 0]
+        if bad:
+            log(f"push refused: outgoing commits touch ignored/secret paths: {sorted(bad)}")
+            return
+        patch = git("log", rng, "-p", "--format=", check=False)
+        if any(v in patch for v in secret_values()):
+            log("push refused: outgoing commits contain a secret value")
+            return
+        r = subprocess.run(["git", "push", "-q", "origin", "main"], cwd=ROOT, capture_output=True, text=True, timeout=90)
+        log("pushed to origin/main" if r.returncode == 0 else f"push failed (will retry next experiment): {r.stderr.strip()[:200]}")
+    except Exception as e:  # noqa: BLE001  a push problem must never cost an experiment
+        log(f"push skipped: {e}")
+
+
 def sha(path):
     with open(os.path.join(ROOT, path), "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
@@ -492,6 +530,7 @@ def run_baseline(state, budget):
     apply_playbook_ops([{"op": "add", "text": f"Baseline: val_loss {res['val_loss']:.4f} in "
                          f"{res['metrics'].get('num_steps', '?')} steps at {res['metrics'].get('num_params_M', '?')}M params (exp 0)"}], 0)
     commit("harness: baseline recorded\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>", ["harness/memory"])
+    push_safely()
     log(f"baseline val_loss {res['val_loss']:.6f}")
     return 0
 
@@ -591,6 +630,7 @@ def main():
     save_json(STATE, state)
     commit(f"harness: exp {n} {status}" + (f" val_loss {res['val_loss']:.6f}" if res["val_loss"] else "")
            + "\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>", ["harness/memory"])
+    push_safely()
     set_status("idle", n + 1)
     return 0
 
