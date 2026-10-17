@@ -24,7 +24,7 @@ python3 harness/run.py --design agentic --until 16:15
 |---|---|---|
 | Who decides the workflow | Code: planner, guards, run, fixer on a crash, reflector | The model: an orchestrator picks one action per turn, up to 8 turns and 4 sub-agents per experiment |
 | Agents | Fixed roles with fixed prompts | Sub-agents the orchestrator spawns itself, choosing each one's role, task, context and model (V4-Pro or Flash). They run in parallel. |
-| Literature | A background researcher fills `memory/ideas.jsonl` | The orchestrator searches when it decides to (`search_literature`) |
+| Literature | A background researcher fills `memory/ideas.jsonl` | The orchestrator searches (`search_literature`, You.com Search) and reads pages it finds (`read_url`, You.com Contents, research domains only, needs `YDC_API_KEY`) when it decides to |
 | Memory | Playbook lessons written by the reflector | `memory/notes.md`, which the orchestrator rewrites itself (`write_notes`) |
 | Task brief | `program.md` | `program.md` plus `designs/agentic_program.md`: one GPU so runs are serial, only thinking parallelizes, and the failure modes past models hit here |
 | Shared code | Edit guards, training, keep/discard by val_loss, logging, git, push (`step.execute` / `step.record`) | Same |

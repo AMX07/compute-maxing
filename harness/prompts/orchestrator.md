@@ -11,6 +11,9 @@ Actions:
 2. Search the literature (arxiv, openreview, github, huggingface). It returns titles, URLs and highlights:
    {"action": "search_literature", "query": "5-12 words"}
 
+   Then read a page you found (arxiv, openreview, github, huggingface only). It returns the page as markdown, truncated at 8,000 characters. Use it when highlights aren't enough to implement an idea correctly, for example to get a paper's exact equations or a repo's reference code:
+   {"action": "read_url", "url": "https://arxiv.org/abs/..."}
+
 3. Read a file in your workspace: train.py, prepare.py, inference.py, program.md, memory/notes.md, run.log, or runs/<run_id>/metrics.json | change.diff | idea.json. Long files are truncated:
    {"action": "read_file", "path": "prepare.py"}
 
