@@ -1,7 +1,7 @@
 {
   "best_commit": "7970f11683529c32e6906d2c95eae66fc2dda666",
   "best_val_loss": 0.17998,
-  "consecutive_discards": 1,
+  "consecutive_discards": 2,
   "frozen": {
     "prepare.py": "1933e4d4bcb9add56d491efb6aa949d888527fc14f0bd99c1cb90369eb9ffb35",
     "inference.py": "b2e01380e6aa3b409a442ce9b9a3340fa5f4643734b4046b9776f84405a79c56"
@@ -141,6 +141,19 @@
       "run_id": "20261017-142624",
       "commit": "e20ccb6",
       "prediction_check": "Prediction was wrong: doubling batch to 256 regressed val_loss by +2.0% instead of improving by -1.0%, likely because step count dropped 46% (2719 to 1465) and memory pressure slowed throughput."
+    },
+    {
+      "n": 11,
+      "title": "Remove warmup, keep cosine warmdown",
+      "category": "lr_schedule",
+      "status": "discard",
+      "idea_id": null,
+      "val_loss": 0.180348,
+      "prediction_pct": -0.5,
+      "actual_pct": 0.204,
+      "run_id": "20261017-142839",
+      "commit": "baf4d1a",
+      "prediction_check": "Prediction was wrong: removing warmup at LR 1e-3 with beta2=0.95 regressed val_loss by +0.2% instead of improving -0.5%, despite gaining ~127 steps."
     }
   ]
 }

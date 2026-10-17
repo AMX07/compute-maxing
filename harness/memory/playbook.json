@@ -39,9 +39,9 @@
     },
     {
       "id": "L7",
-      "text": "Removing warmup regresses val_loss ~0.7% (exp 6) and ~0.45% with beta2=0.95 (exp 8); warmup is protective regardless of optimizer adaptation (exp 6, 8)",
+      "text": "Removing warmup regresses val_loss ~0.7% at LR 5e-4 (exp 6), ~0.45% with beta2=0.95 (exp 8), and ~0.2% at LR 1e-3 (exp 11); warmup is protective across LR and beta2 (exp 6, 8, 11)",
       "since": 6,
-      "updated": 8
+      "updated": 11
     },
     {
       "id": "L8",
@@ -51,9 +51,9 @@
     },
     {
       "id": "L9",
-      "text": "LR 1e-3 with warmup beats 5e-4 by ~1.5% val_loss and adds steps; adaLN-Zero tolerates higher LR (exp 9)",
+      "text": "LR 1e-3 with warmup beats 5e-4 by ~1.5% val_loss and adds steps; adaLN-Zero tolerates higher LR, but removing warmup at 1e-3 regresses ~0.2% (exp 9, 11)",
       "since": 9,
-      "updated": 9
+      "updated": 11
     },
     {
       "id": "L10",
