@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autoresearch Diffusion</title>
+<link rel="stylesheet" href="/style.css">
+<script>
+  try { const t = localStorage.getItem("ar-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <div class="glyph" id="glyph" aria-hidden="true"></div>
+    <div class="brand-text">
+      <h1>autoresearch <span>diffusion</span></h1>
+      <p class="prompt">“<span id="prompt">a photo of a horse</span>” · 16 fixed seeds</p>
+    </div>
+  </div>
+  <div class="kpis" id="kpis"></div>
+  <div class="live" id="live"></div>
+  <nav class="tabs" aria-label="View">
+    <button type="button" id="tab-progress" data-view="progress" title="Progress view (P)">Progress</button>
+    <button type="button" id="tab-compare" data-view="compare" title="Compare two runs (C)">Compare</button>
+    <button type="button" id="theme" class="icon" title="Light or dark (T)" aria-label="Toggle light or dark theme">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10 2.75a7.25 7.25 0 0 1 0 14.5z" fill="currentColor"/></svg>
+    </button>
+  </nav>
+</header>
+
+<main>
+  <section id="view-progress" class="progress">
+    <div class="col-left">
+      <section class="panel chart-panel" aria-labelledby="chart-title">
+        <div class="panel-head">
+          <h2 id="chart-title">val_loss by experiment <span class="sub">lower is better</span></h2>
+          <ul class="legend">
+            <li><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" class="m-keep"/></svg>kept</li>
+            <li><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="4" class="m-discard"/></svg>discarded</li>
+            <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" class="m-crash"/></svg>crashed</li>
+            <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1 5h7v6h7" class="m-best"/></svg>running best</li>
+          </ul>
+        </div>
+        <div class="chart" id="chart"></div>
+      </section>
+      <section class="panel list-panel" aria-label="Experiments">
+        <div class="row row-head" aria-hidden="true">
+          <span class="c-n">#</span><span class="c-status">Result</span><span class="c-desc">Idea tried</span>
+          <span class="c-num">val_loss</span><span class="c-num">vs baseline</span><span class="c-num">vs prev best</span>
+        </div>
+        <div class="list" id="list"></div>
+      </section>
+    </div>
+    <section class="panel detail" id="detail" aria-live="polite"></section>
+  </section>
+
+  <section id="view-compare" class="compare" hidden></section>
+</main>
+
+<div class="tip" id="tip" role="tooltip" hidden></div>
+<script src="/app.js"></script>
+</body>
+</html>
