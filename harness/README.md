@@ -23,7 +23,7 @@ python3 harness/run.py --design agentic --until 16:15
 | | `fixed` | `agentic` |
 |---|---|---|
 | Who decides the workflow | Code: planner, guards, run, fixer on a crash, reflector | The model: an orchestrator picks one action per turn, up to 8 turns and 4 sub-agents per experiment |
-| Agents | Fixed roles with fixed prompts | Sub-agents the orchestrator spawns itself, choosing each one's role, task, context and model (V4-Pro or Flash). They run in parallel. |
+| Agents | Fixed roles with fixed prompts | Sub-agents the orchestrator spawns itself, choosing each one's role, task, context and model (V4 Pro, or Nemotron 3.5 Super VL for low-risk work). They run in parallel. |
 | Literature | A background researcher fills `memory/ideas.jsonl` | The orchestrator searches (`search_literature`, You.com Search) and reads pages it finds (`read_url`, You.com Contents, research domains only, needs `YDC_API_KEY`) when it decides to |
 | Memory | Playbook lessons written by the reflector | `memory/notes.md`, which the orchestrator rewrites itself (`write_notes`) |
 | Task brief | `program.md` | `program.md` plus `designs/agentic_program.md`: one GPU so runs are serial, only thinking parallelizes, and the failure modes past models hit here |
@@ -56,9 +56,11 @@ Each experiment runs in a fresh process, and all state lives in files. A crash c
 ## Models and thinking (`harness/config.json`)
 
 `models` maps each role to a Crusoe model:
-- **V4-Pro:** planner, fixer, orchestrator.
-- **V4-Flash:** reflector, researcher.
-- **Sub-agents:** "pro" or "flash", as the orchestrator chooses.
+- **DeepSeek V4 Pro:** the planner in both designs (the fixed design's planner, the model-driven design's orchestrator), and the fixer. These make the ML decisions and write the code.
+- **Nemotron 3.5 Super VL (reasoning off):** reflector, researcher, and the architecture mapper (`mapper`). This is lower-risk work that the planner checks anyway.
+- **Sub-agents:** `subagent_models` defines the tiers. The orchestrator picks "pro" for decisions, code and debugging, and "nemotron" for reading, summarizing and extracting. The old "flash" tier maps to "nemotron".
+
+Why Nemotron there and not elsewhere: on Crusoe (2026-10-17) we replayed real harness calls. With reasoning off, Nemotron 3.5 Super VL matched V4-Flash on speed (1.6–4 s) and on the quality of the reflector's lessons, at a slightly lower input price. With reasoning on, it took 14–43 s. Without reasoning it failed a crash fix that V4 Pro got right, so it stays out of code-writing roles. Nemotron 3.5 Lightning was cheaper but wrote a playbook lesson the data didn't support. `llm.py` turns Nemotron's default reasoning off (`chat_template_kwargs: {"enable_thinking": false}`) unless the role is listed under `thinking`.
 
 DeepSeek V4 only reasons when asked (`chat_template_kwargs: {"thinking": true}`). `thinking` lists the roles that get it, with a 16k-token budget. Measured on our prompts:
 

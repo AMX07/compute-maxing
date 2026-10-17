@@ -53,8 +53,12 @@ def chat(messages, role, tag, temperature=0.7, max_tokens=8192, timeout=600, mod
     url = cfg["CRUSOE_BASE_URL"].rstrip("/") + "/chat/completions"
     model = model or role_model(role) or cfg["CRUSOE_MODEL"]
     body = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
-    if role_thinking(role):  # DeepSeek V4: reasoning is off unless requested; it needs room in max_tokens
+    think = role_thinking(role)
+    if "nemotron" in model.lower():  # Nemotron reasons unless told not to, which made calls 10-40x slower
+        body["chat_template_kwargs"] = {"enable_thinking": think}
+    elif think:  # DeepSeek V4: reasoning is off unless requested
         body["chat_template_kwargs"] = {"thinking": True}
+    if think:  # reasoning needs room in max_tokens
         body["max_tokens"] = max(max_tokens, 16000)
     t0 = time.time()
     last_err = None

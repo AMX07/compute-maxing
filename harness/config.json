@@ -1,13 +1,19 @@
 {
   "models": {
     "planner": "deepseek-ai/DeepSeek-V4-Pro",
+    "orchestrator": "deepseek-ai/DeepSeek-V4-Pro",
     "fixer": "deepseek-ai/DeepSeek-V4-Pro",
-    "reflector": "deepseek-ai/Deepseek-V4-Flash",
-    "researcher": "deepseek-ai/Deepseek-V4-Flash",
-    "orchestrator": "deepseek-ai/DeepSeek-V4-Pro"
+    "reflector": "nvidia/NVIDIA-Nemotron-3.5-Super-VL",
+    "researcher": "nvidia/NVIDIA-Nemotron-3.5-Super-VL",
+    "mapper": "nvidia/NVIDIA-Nemotron-3.5-Super-VL"
   },
+  "subagent_models": {
+    "pro": "deepseek-ai/DeepSeek-V4-Pro",
+    "nemotron": "nvidia/NVIDIA-Nemotron-3.5-Super-VL"
+  },
+  "models_note": "DeepSeek V4 Pro wherever an ML decision or a code edit is made: the planner (fixed design), the orchestrator (model-driven design, its planner) and the fixer. Nemotron 3.5 Super VL, with reasoning off, for lower-risk work the planner checks anyway: the reflector's lessons, the researcher's queries and idea cards, the architecture map, and quick sub-agent tasks. Replaying real harness calls on Crusoe (2026-10-17): with reasoning off, Super VL matched V4-Flash on speed (1.6-4 s) and quality, and was slightly cheaper on input; with reasoning on it took 14-43 s. Without reasoning it failed a crash fix that V4 Pro got right. Nemotron 3.5 Lightning was cheaper but wrote an unsupported playbook lesson, so it is not used.",
   "thinking": {
     "fixer": true
   },
-  "thinking_note": "Roles listed here get DeepSeek thinking (chat_template_kwargs.thinking) with a 16k-token budget. It made one planner call take 129 s instead of 3-8 s, so only the rarely-called fixer uses it."
+  "thinking_note": "Roles listed here reason before answering. DeepSeek V4 reasons only when asked (chat_template_kwargs.thinking) and gets a 16k-token budget; it made one planner call take 129 s instead of 3-8 s, so only the rarely-called fixer uses it. Nemotron reasons by default, so llm.py turns it off (chat_template_kwargs.enable_thinking=false) for every role not listed here."
 }

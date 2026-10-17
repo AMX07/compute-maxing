@@ -30,7 +30,11 @@ def read_opt(path):
 
 MAX_TURNS = 8                    # orchestrator actions per experiment (the last one must run an experiment)
 MAX_AGENTS = 4                   # sub-agents per experiment
-MODELS = {"pro": "deepseek-ai/DeepSeek-V4-Pro", "flash": "deepseek-ai/Deepseek-V4-Flash"}
+# Sub-agent tiers the orchestrator picks from (harness/config.json "subagent_models"): pro for decisions and code,
+# nemotron for fast low-risk reading and summarizing. "flash", the old fast tier, maps to nemotron.
+MODELS = {"pro": "deepseek-ai/DeepSeek-V4-Pro", "nemotron": "nvidia/NVIDIA-Nemotron-3.5-Super-VL",
+          **llm._config_file().get("subagent_models", {})}
+FAST = "nemotron"
 NOTES = os.path.join(wsp.MEM, "notes.md")
 AGENTS_DIR = os.path.join(wsp.MEM, "agents")
 PROMPTS = os.path.join(step.ROOT, "harness", "prompts")
@@ -82,8 +86,10 @@ def context_item(item, state, src):
 def run_agent(spec, k, n, state, src):
     role = str(spec.get("role") or "research assistant")[:200]
     task = str(spec.get("task") or "")[:4000]
-    model_key = str(spec.get("model") or "flash").lower()
-    model = MODELS.get(model_key, MODELS["flash"])
+    model_key = str(spec.get("model") or FAST).lower()
+    if model_key not in MODELS:
+        model_key = FAST
+    model = MODELS[model_key]
     items = [str(c) for c in (spec.get("context") or [])][:5]
     messages = [{"role": "system", "content": read(wsp.prompt_path("subagent")).replace("{role}", role)},
                 {"role": "user", "content": f"## Task\n\n{task}\n\n" + "\n\n".join(context_item(c, state, src) for c in items)}]

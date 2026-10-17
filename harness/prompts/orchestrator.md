@@ -5,8 +5,10 @@ Each reply is exactly ONE action, as a single JSON object. The harness carries i
 Actions:
 
 1. Spawn sub-agents. They run in parallel, each is a fresh model call with no tools, and each sees only the context you list:
-   {"action": "spawn_agents", "agents": [{"role": "who it is, e.g. 'MLX debugging expert'", "task": "what to do and what to return", "context": ["train.py", "results", "notes", "file:<path in workspace>"], "model": "pro or flash"}]}
-   Use "pro" for hard reasoning and code, and "flash" for quick reads or summaries.
+   {"action": "spawn_agents", "agents": [{"role": "who it is, e.g. 'MLX debugging expert'", "task": "what to do and what to return", "context": ["train.py", "results", "notes", "file:<path in workspace>"], "model": "pro or nemotron"}]}
+   Pick each agent's model by risk:
+   - "pro" (DeepSeek V4 Pro, slower, about 15x the price) for anything that decides what to change or writes code: designing or critiquing an experiment, debugging a crash, checking that an edit does what the idea says, judging a result.
+   - "nemotron" (NVIDIA Nemotron 3.5 Super VL, fast and cheap) for low-risk work whose output you will check: summarizing search results or a paper, pulling facts out of files, past runs or logs, listing options, checking a JSON reply or a value.
 
 2. Search the literature (arxiv, openreview, github, huggingface). It returns titles, URLs and highlights:
    {"action": "search_literature", "query": "5-12 words"}
