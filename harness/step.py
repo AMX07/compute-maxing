@@ -41,7 +41,8 @@ TRAIN = os.path.join(WS, "train.py")
 RESULTS = os.path.join(WS, "results.tsv")
 RUN_LOG = os.path.join(WS, "run.log")
 RUNS = os.path.join(WS, "runs")
-TRAIN_REL, MEM_REL = wsp.rel(TRAIN), wsp.rel(MEM)   # for git
+ARCH = os.path.join(WS, "architecture.json")       # the web UI's component map, kept by harness/map_architecture.py
+TRAIN_REL, MEM_REL, ARCH_REL = wsp.rel(TRAIN), wsp.rel(MEM), wsp.rel(ARCH)   # for git
 HEADER = "commit\tval_loss\tmemory_gb\tstatus\trun_id\tdescription\n"
 
 FROZEN = ["prepare.py", "inference.py"]
@@ -51,6 +52,7 @@ SAMPLE_LIMIT = 120               # seconds allowed for the 16 benchmark images
 MIN_CAPTION_DROPOUT = 0.1
 MAX_LESSONS = 25
 STUCK_AFTER = 4                  # discards in a row before the planner is told to switch category
+MAP_TIMEOUT = 300                # seconds for the architecture map update after an experiment
 
 
 def log(msg):
@@ -606,6 +608,18 @@ def finish_artifacts(res, meta, outcome, parent_commit, exp_commit):
         write(os.path.join(res["run_dir"], "change.diff"), diff + "\n")
 
 
+def update_map(n, title=None):
+    """Add the newest experiment and any new queued ideas to architecture.json: one small call on the reflector's
+    model, in its own process so a failure or a hang never costs an experiment. Returns the paths to commit."""
+    set_status("mapping", n, title)
+    try:
+        subprocess.run([sys.executable, os.path.join(ROOT, "harness", "map_architecture.py"), "--workspace", WS],
+                       cwd=ROOT, timeout=MAP_TIMEOUT)
+    except Exception as e:  # noqa: BLE001
+        log(f"architecture map skipped: {e}")
+    return [MEM_REL] + ([ARCH_REL] if os.path.exists(ARCH) else [])
+
+
 def run_baseline(state, budget):
     log("no results yet: running the unmodified train.py as the baseline")
     # A new workspace's files must be in git before anything can be restored from best_commit.
@@ -630,7 +644,8 @@ def run_baseline(state, budget):
     save_json(STATE, state)
     apply_playbook_ops([{"op": "add", "text": f"Baseline: val_loss {res['val_loss']:.4f} in "
                          f"{res['metrics'].get('num_steps', '?')} steps at {res['metrics'].get('num_params_M', '?')}M params (exp 0)"}], 0)
-    commit("harness: baseline recorded\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>", [MEM_REL])
+    paths = update_map(0, "Baseline")
+    commit("harness: baseline recorded\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>", paths)
     push_safely()
     log(f"baseline val_loss {res['val_loss']:.6f}")
     return 0
@@ -695,7 +710,7 @@ def execute(state, meta, new_src, n, fixer=None):
 
 
 def record(state, meta, ex, n, **extra):
-    """Append to the history, save state, commit this design's memory, push."""
+    """Append to the history, save state, map the experiment in architecture.json, commit this design's memory, push."""
     res, status, outcome = ex["res"], ex["status"], ex["outcome"]
     pred = meta.get("prediction") or {}
     state["history"].append({"n": n, "title": meta.get("title"), "category": meta.get("category"), "status": status,
@@ -706,8 +721,9 @@ def record(state, meta, ex, n, **extra):
                              "prediction_check": outcome.get("prediction_check"), **extra})
     state["last_outcome"] = {"n": n, "title": meta.get("title"), **{k: v for k, v in outcome.items() if v is not None}}
     save_json(STATE, state)
+    paths = update_map(n, meta.get("title"))
     commit(f"harness: exp {n} {status}" + (f" val_loss {res['val_loss']:.6f}" if res["val_loss"] else "")
-           + "\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>", [MEM_REL])
+           + "\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>", paths)
     push_safely()
     set_status("idle", n + 1)
 
