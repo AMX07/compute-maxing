@@ -1,7 +1,7 @@
 {
   "best_commit": "e960c809809b298ef24884fa6c682b7cf46e289d",
   "best_val_loss": 0.183772,
-  "consecutive_discards": 0,
+  "consecutive_discards": 1,
   "frozen": {
     "prepare.py": "1933e4d4bcb9add56d491efb6aa949d888527fc14f0bd99c1cb90369eb9ffb35",
     "inference.py": "b2e01380e6aa3b409a442ce9b9a3340fa5f4643734b4046b9776f84405a79c56"
@@ -15,6 +15,18 @@
       "val_loss": 0.183772,
       "run_id": "20261017-140315",
       "commit": "e960c80"
+    },
+    {
+      "n": 1,
+      "title": "Cosine LR schedule with warmup",
+      "category": "lr_schedule",
+      "status": "discard",
+      "val_loss": 0.196571,
+      "prediction_pct": -2.0,
+      "actual_pct": 6.965,
+      "run_id": "20261017-140521",
+      "commit": "4489898",
+      "prediction_check": "Predicted a 2% improvement but got a 7% regression, likely because cosine decay reduced time at high LR and hurt final convergence in the short budget."
     }
   ]
 }

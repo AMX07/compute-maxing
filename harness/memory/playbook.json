@@ -1,11 +1,17 @@
 {
-  "next_id": 2,
+  "next_id": 3,
   "lessons": [
     {
       "id": "L1",
       "text": "Baseline: val_loss 0.1838 in 2719 steps at 11.48M params (exp 0)",
       "since": 0,
       "updated": 0
+    },
+    {
+      "id": "L2",
+      "text": "Cosine LR schedule with warmup regresses val_loss by ~7% vs baseline in 2-min runs (exp 1)",
+      "since": 1,
+      "updated": 1
     }
   ]
 }
