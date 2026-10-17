@@ -234,8 +234,8 @@ def get_lr_multiplier(progress):
     elif progress < 1.0 - WARMDOWN_RATIO:
         return 1.0
     else:
-        cooldown = (1.0 - progress) / WARMDOWN_RATIO
-        return cooldown * 1.0 + (1 - cooldown) * FINAL_LR_FRAC
+        cooldown = (progress - (1.0 - WARMDOWN_RATIO)) / WARMDOWN_RATIO
+        return FINAL_LR_FRAC + 0.5 * (1.0 - FINAL_LR_FRAC) * (1.0 + math.cos(math.pi * cooldown))
 
 
 def main():
