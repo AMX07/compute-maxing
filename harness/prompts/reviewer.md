@@ -9,6 +9,8 @@ Check only whether the code does what the idea says. Do NOT judge whether the id
 - Likely crashes: shape or dtype mismatches, MLX APIs that don't exist, a missing import.
 - Broken time accounting or anything that would make training run past the budget.
 
+Do not flag speed concerns, and do not flag the order of MLX calls: MLX builds a lazy graph, so reading parameters or calling `mx.eval`/`mx.async_eval` after an update sees the updated values. Speed is measured by the run itself.
+
 You also get the full file after the edit. Check imports and definitions there before claiming something is missing or undefined.
 
 Be decisive and concrete. Flag only real problems you can point to in the code, not style.
