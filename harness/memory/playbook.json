@@ -1,5 +1,5 @@
 {
-  "next_id": 11,
+  "next_id": 12,
   "lessons": [
     {
       "id": "L1",
@@ -60,6 +60,12 @@
       "text": "Batch 256 regresses val_loss ~2% vs 128; step count drops 46% and memory 5.6GB; keep batch 128 (exp 10)",
       "since": 10,
       "updated": 10
+    },
+    {
+      "id": "L11",
+      "text": "Weight decay 0.01 regresses val_loss ~0.14% vs 0.0 at LR 1e-3; mild regularization not helpful in short budget (exp 12)",
+      "since": 12,
+      "updated": 12
     }
   ]
 }
