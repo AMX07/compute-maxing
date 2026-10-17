@@ -11,3 +11,4 @@ Lessons the loop has learned, maintained by the reflector.
 - [L7] Removing warmup regresses val_loss ~0.7% (exp 6) and ~0.45% with beta2=0.95 (exp 8); warmup is protective regardless of optimizer adaptation (exp 6, 8)
 - [L8] Lowering AdamW beta2 from 0.99 to 0.95 gives negligible val_loss change (-0.06%) and does not enable warmup removal (exp 7, 8)
 - [L9] LR 1e-3 with warmup beats 5e-4 by ~1.5% val_loss and adds steps; adaLN-Zero tolerates higher LR (exp 9)
+- [L10] Batch 256 regresses val_loss ~2% vs 128; step count drops 46% and memory 5.6GB; keep batch 128 (exp 10)

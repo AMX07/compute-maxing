@@ -1,5 +1,5 @@
 {
-  "next_id": 10,
+  "next_id": 11,
   "lessons": [
     {
       "id": "L1",
@@ -54,6 +54,12 @@
       "text": "LR 1e-3 with warmup beats 5e-4 by ~1.5% val_loss and adds steps; adaLN-Zero tolerates higher LR (exp 9)",
       "since": 9,
       "updated": 9
+    },
+    {
+      "id": "L10",
+      "text": "Batch 256 regresses val_loss ~2% vs 128; step count drops 46% and memory 5.6GB; keep batch 128 (exp 10)",
+      "since": 10,
+      "updated": 10
     }
   ]
 }

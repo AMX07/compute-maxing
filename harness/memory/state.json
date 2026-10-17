@@ -1,7 +1,7 @@
 {
   "best_commit": "7970f11683529c32e6906d2c95eae66fc2dda666",
   "best_val_loss": 0.17998,
-  "consecutive_discards": 0,
+  "consecutive_discards": 1,
   "frozen": {
     "prepare.py": "1933e4d4bcb9add56d491efb6aa949d888527fc14f0bd99c1cb90369eb9ffb35",
     "inference.py": "b2e01380e6aa3b409a442ce9b9a3340fa5f4643734b4046b9776f84405a79c56"
@@ -128,6 +128,19 @@
       "run_id": "20261017-142413",
       "commit": "7970f11",
       "prediction_check": "Prediction matched almost exactly: LR 1e-3 improved val_loss by -1.496% vs predicted -1.5%, with no instability and more steps (2890 vs 2719)."
+    },
+    {
+      "n": 10,
+      "title": "Increase batch size to 256",
+      "category": "batch_throughput",
+      "status": "discard",
+      "idea_id": "I7",
+      "val_loss": 0.18363,
+      "prediction_pct": -1.0,
+      "actual_pct": 2.028,
+      "run_id": "20261017-142624",
+      "commit": "e20ccb6",
+      "prediction_check": "Prediction was wrong: doubling batch to 256 regressed val_loss by +2.0% instead of improving by -1.0%, likely because step count dropped 46% (2719 to 1465) and memory pressure slowed throughput."
     }
   ]
 }
