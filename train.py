@@ -183,7 +183,7 @@ def sample(model, tokens, noise):
 # ---------------------------------------------------------------------------
 
 # Model architecture
-DEPTH = 8               # number of DiT blocks
+DEPTH = 10              # number of DiT blocks
 N_EMBD = 256            # model width
 N_HEAD = 4              # attention heads
 PATCH_SIZE = 4          # 32x32 image -> 8x8 = 64 tokens
