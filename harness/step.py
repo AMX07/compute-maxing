@@ -24,6 +24,7 @@ import sys
 import time
 
 from harness import llm
+from harness import workspace as wsp
 
 try:  # the idea bank is optional: a broken researcher must never stop an experiment
     from harness import researcher
@@ -31,14 +32,16 @@ except Exception:  # noqa: BLE001
     researcher = None
 
 ROOT = llm.ROOT
-MEM = os.path.join(ROOT, "harness", "memory")
+WS = wsp.WS                      # this design's workspace: train.py, results.tsv, runs/, memory/, traces/
+MEM = wsp.MEM
 STATE = os.path.join(MEM, "state.json")
 PLAYBOOK = os.path.join(MEM, "playbook.json")
 PROMPTS = os.path.join(ROOT, "harness", "prompts")
-TRAIN = os.path.join(ROOT, "train.py")
-RESULTS = os.path.join(ROOT, "results.tsv")
-RUN_LOG = os.path.join(ROOT, "run.log")
-RUNS = os.path.join(ROOT, "runs")
+TRAIN = os.path.join(WS, "train.py")
+RESULTS = os.path.join(WS, "results.tsv")
+RUN_LOG = os.path.join(WS, "run.log")
+RUNS = os.path.join(WS, "runs")
+TRAIN_REL, MEM_REL = wsp.rel(TRAIN), wsp.rel(MEM)   # for git
 HEADER = "commit\tval_loss\tmemory_gb\tstatus\trun_id\tdescription\n"
 
 FROZEN = ["prepare.py", "inference.py"]
@@ -57,8 +60,8 @@ def log(msg):
 def set_status(phase, n, title=None, **extra):
     """harness/traces/status.json tells the web UI what the loop is doing right now."""
     try:
-        os.makedirs(os.path.join(ROOT, "harness", "traces"), exist_ok=True)
-        save_json(os.path.join(ROOT, "harness", "traces", "status.json"),
+        os.makedirs(wsp.TRACES, exist_ok=True)
+        save_json(os.path.join(wsp.TRACES, "status.json"),
                   {"phase": phase, "n": n, "title": title, "since": time.time(), **extra})
     except OSError:
         pass
@@ -122,7 +125,7 @@ def push_safely():
 
 
 def sha(path):
-    with open(os.path.join(ROOT, path), "rb") as f:
+    with open(os.path.join(WS, path), "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
 
 
@@ -152,7 +155,7 @@ def save_json(path, obj):
 
 
 def time_budget():
-    m = re.search(r"^TIME_BUDGET\s*=\s*(\d+)", read(os.path.join(ROOT, "prepare.py")), re.M)
+    m = re.search(r"^TIME_BUDGET\s*=\s*(\d+)", read(os.path.join(WS, "prepare.py")), re.M)
     return int(m.group(1)) if m else 120
 
 
@@ -383,19 +386,54 @@ def birthtime(path):
     return getattr(st, "st_birthtime", st.st_mtime)
 
 
+FAKE_TRAIN = os.environ.get("HARNESS_FAKE_TRAIN") == "1"
+
+
+class FakeRun:
+    """No-GPU stand-in for tests (HARNESS_FAKE_TRAIN=1). Writes a run folder and run.log the way train.py does,
+    with a val_loss derived from the code, so every other step of the pipeline runs for real."""
+    def __init__(self, out):
+        src = read(TRAIN)
+        try:
+            ast.parse(src)
+        except SyntaxError:
+            out.write("SyntaxError (fake run)\n")
+            self.returncode = 1
+            return
+        h = int(hashlib.sha256(src.encode()).hexdigest()[:8], 16)
+        base = (load_json(STATE, {}) or {}).get("best_val_loss") or 0.1838
+        val = round(base * (0.985 + (h % 400) / 10000), 6)        # between -1.5% and +2.5% of the best
+        run_id = time.strftime("%Y%m%d-%H%M%S")
+        run_dir = os.path.join(RUNS, run_id)
+        while os.path.exists(run_dir):
+            run_dir += "x"
+        os.makedirs(run_dir)
+        metrics = {"run_id": os.path.basename(run_dir), "commit": git("rev-parse", "--short=7", "HEAD", check=False),
+                   "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "val_loss": val, "training_seconds": 0.0,
+                   "total_seconds": 0.0, "peak_memory_gb": 0.0, "num_steps": 0, "num_params_M": 0.0, "fake": True}
+        save_json(os.path.join(run_dir, "metrics.json"), metrics)
+        write(os.path.join(run_dir, "train.py"), src)
+        out.write(f"FAKE RUN (no GPU)\n---\nval_loss:         {val:.6f}\npeak_memory_gb:   0.0\nnum_steps:        0\n"
+                  f"run_dir:          {run_dir}\n")
+        self.returncode = 0
+
+
 def run_training():
-    log("training (uv run train.py > run.log)")
+    log("training (uv run train.py > run.log)" + (" [FAKE, no GPU]" if FAKE_TRAIN else ""))
     start = time.time()
     timed_out = False
     with open(RUN_LOG, "w") as out:
-        proc = subprocess.Popen(["uv", "run", "train.py"], cwd=ROOT, stdout=out, stderr=subprocess.STDOUT,
-                                start_new_session=True)
-        try:
-            proc.wait(timeout=RUN_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait()
+        if FAKE_TRAIN:
+            proc = FakeRun(out)
+        else:
+            proc = subprocess.Popen(["uv", "run", "train.py"], cwd=WS, stdout=out, stderr=subprocess.STDOUT,
+                                    start_new_session=True)
+            try:
+                proc.wait(timeout=RUN_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait()
     text = read(RUN_LOG) if os.path.exists(RUN_LOG) else ""
 
     def field(name):
@@ -478,7 +516,7 @@ def mark_idea(meta, n, status, val_loss):
 def planner_messages(state, src, lessons, n):
     parts = [
         f"## Research brief (program.md, written for coding agents; the harness now does the git/run/log steps)\n\n"
-        f"{read(os.path.join(ROOT, 'program.md'))}",
+        f"{read(os.path.join(WS, 'program.md'))}",
         f"## Playbook: lessons so far\n\n{render_playbook(lessons)}",
         idea_bank_text(),
         f"## Experiment log (results.tsv; 'vs best before' is the change against the best kept val_loss at that time)\n\n"
@@ -559,10 +597,11 @@ def reflect(meta, outcome, lessons, n, diff=""):
 def finish_artifacts(res, meta, outcome, parent_commit, exp_commit):
     if not res.get("run_dir"):
         return
-    idea = {k: meta.get(k) for k in ("title", "category", "rationale", "prediction", "sources") if meta.get(k)}
+    idea = {k: meta.get(k) for k in ("title", "category", "rationale", "prediction", "self_check", "sources", "idea_id",
+                                     "agents", "actions") if meta.get(k)}
     idea["outcome"] = outcome
     save_json(os.path.join(res["run_dir"], "idea.json"), idea)
-    diff = git("diff", parent_commit, exp_commit, "--", "train.py", check=False)
+    diff = git("diff", parent_commit, exp_commit, "--", TRAIN_REL, check=False)
     if diff:
         write(os.path.join(res["run_dir"], "change.diff"), diff + "\n")
 
@@ -586,51 +625,31 @@ def run_baseline(state, budget):
     save_json(STATE, state)
     apply_playbook_ops([{"op": "add", "text": f"Baseline: val_loss {res['val_loss']:.4f} in "
                          f"{res['metrics'].get('num_steps', '?')} steps at {res['metrics'].get('num_params_M', '?')}M params (exp 0)"}], 0)
-    commit("harness: baseline recorded\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>", ["harness/memory"])
+    commit("harness: baseline recorded\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>", [MEM_REL])
     push_safely()
     log(f"baseline val_loss {res['val_loss']:.6f}")
     return 0
 
 
-def main():
-    os.makedirs(MEM, exist_ok=True)
-    state = load_state()
-    check_frozen(state)
+def execute(state, meta, new_src, n, fixer=None):
+    """Shared by every design: commit the edit, train, optionally repair a crash, decide keep/discard in code,
+    revert on discard, and log results.tsv, idea.json and change.diff. `fixer(new_src, res)` returns
+    (fixed_src or None, note)."""
     budget = time_budget()
-    n = len(read_results())
-    if n == 0 or state["best_val_loss"] is None:
-        return run_baseline(state, budget)
-
-    # Always start from the best version, even if the working copy drifted.
-    git("checkout", state["best_commit"], "--", "train.py")
-    src = read(TRAIN)
-    lessons = load_json(PLAYBOOK, {"lessons": []})["lessons"]
-
-    log(f"experiment #{n}: planning (best val_loss {state['best_val_loss']:.6f})")
-    set_status("planning", n)
-    meta, new_src = propose(state, src, lessons, n)
-    if meta is None:
-        log("planner failed 3 times; skipping this iteration")
-        return 2
     desc = re.sub(r"\s+", " ", str(meta.get("description", meta.get("title", "experiment")))).strip()[:100]
-    log(f"idea: {meta.get('title')} [{meta.get('category')}] predicted {meta.get('prediction', {}).get('delta_pct')}%")
     write(TRAIN, new_src)
     parent = state["best_commit"]
-    exp_commit = commit(f"exp {n}: {desc}", ["train.py"])
+    exp_commit = commit(f"exp {n}: {desc}", [TRAIN_REL])
 
     set_status("training", n, meta.get("title"), prediction=meta.get("prediction"))
     res = run_training()
     fix_note = None
-    if res["val_loss"] is None:
+    if res["val_loss"] is None and fixer:
         log("crashed; asking the fixer for one repair")
-        try:
-            fixed_src, info = fix(new_src, meta, res, n)
-        except RuntimeError as e:
-            fixed_src, info = None, {"error": str(e)}
-        fix_note = info.get("fix") or info.get("reason")
+        fixed_src, fix_note = fixer(new_src, res)
         if fixed_src:
             write(TRAIN, fixed_src)
-            exp_commit = commit(f"exp {n} fix: {fix_note or 'repair crash'}"[:200], ["train.py"])
+            exp_commit = commit(f"exp {n} fix: {fix_note or 'repair crash'}"[:200], [TRAIN_REL])
             set_status("training", n, meta.get("title"), note="retry after fix")
             res = run_training()
 
@@ -651,8 +670,8 @@ def main():
     if status == "keep":
         state.update(best_commit=exp_commit, best_val_loss=res["val_loss"], consecutive_discards=0)
     else:
-        git("checkout", parent, "--", "train.py")
-        commit(f"revert exp {n} ({status})", ["train.py"])
+        git("checkout", parent, "--", TRAIN_REL)
+        commit(f"revert exp {n} ({status})", [TRAIN_REL])
         state["consecutive_discards"] += 1
 
     pred = meta.get("prediction") or {}
@@ -666,29 +685,80 @@ def main():
         outcome["error_tail"] = res["tail"][-1500:]
     finish_artifacts(res, meta, outcome, parent, exp_commit)
     append_result(exp_commit, res["val_loss"], res["memory_gb"], status, res["run_id"], desc)
-    mark_idea(meta, n, status, res["val_loss"])
+    return {"res": res, "status": status, "outcome": outcome, "parent": parent, "exp_commit": exp_commit,
+            "actual_pct": actual_pct}
 
-    set_status("reflecting", n, meta.get("title"))
-    try:
-        refl = reflect(meta, outcome, lessons, n, git("diff", parent, exp_commit, "--", "train.py", check=False))
-        lessons = apply_playbook_ops(refl.get("ops"), n)
-        outcome["prediction_check"] = refl.get("prediction_check")
-        if res.get("run_dir"):
-            finish_artifacts(res, meta, outcome, parent, exp_commit)
-    except Exception as e:  # reflection is useful but never worth losing an experiment over
-        log(f"reflector failed: {e}")
 
+def record(state, meta, ex, n, **extra):
+    """Append to the history, save state, commit this design's memory, push."""
+    res, status, outcome = ex["res"], ex["status"], ex["outcome"]
+    pred = meta.get("prediction") or {}
     state["history"].append({"n": n, "title": meta.get("title"), "category": meta.get("category"), "status": status,
                              "idea_id": meta.get("idea_id"),
                              "val_loss": res["val_loss"], "prediction_pct": pred.get("delta_pct"),
-                             "actual_pct": round(actual_pct, 3) if actual_pct is not None else None,
-                             "run_id": res["run_id"], "commit": exp_commit[:7],
-                             "prediction_check": outcome.get("prediction_check")})
+                             "actual_pct": round(ex["actual_pct"], 3) if ex["actual_pct"] is not None else None,
+                             "run_id": res["run_id"], "commit": ex["exp_commit"][:7],
+                             "prediction_check": outcome.get("prediction_check"), **extra})
+    state["last_outcome"] = {"n": n, "title": meta.get("title"), **{k: v for k, v in outcome.items() if v is not None}}
     save_json(STATE, state)
     commit(f"harness: exp {n} {status}" + (f" val_loss {res['val_loss']:.6f}" if res["val_loss"] else "")
-           + "\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>", ["harness/memory"])
+           + "\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>", [MEM_REL])
     push_safely()
     set_status("idle", n + 1)
+
+
+def begin():
+    """Common start of an iteration: load state, check the evaluator, reset train.py to the best version.
+    Returns (state, n, src), or runs the baseline and returns None."""
+    os.makedirs(MEM, exist_ok=True)
+    state = load_state()
+    check_frozen(state)
+    n = len(read_results())
+    if n == 0 or state["best_val_loss"] is None:
+        run_baseline(state, time_budget())
+        return None
+    git("checkout", state["best_commit"], "--", TRAIN_REL)
+    return state, n, read(TRAIN)
+
+
+def main():
+    """The fixed design: planner -> guards -> run -> fixer on crash -> decide -> reflector -> playbook."""
+    started = begin()
+    if started is None:
+        return 0 if read_results() else 1
+    state, n, src = started
+    lessons = load_json(PLAYBOOK, {"lessons": []})["lessons"]
+
+    log(f"experiment #{n}: planning (best val_loss {state['best_val_loss']:.6f})")
+    set_status("planning", n)
+    meta, new_src = propose(state, src, lessons, n)
+    if meta is None:
+        log("planner failed 3 times; skipping this iteration")
+        return 2
+    log(f"idea: {meta.get('title')} [{meta.get('category')}] predicted {meta.get('prediction', {}).get('delta_pct')}%")
+
+    def fixer(edited_src, res):
+        try:
+            fixed_src, info = fix(edited_src, meta, res, n)
+        except RuntimeError as e:
+            fixed_src, info = None, {"error": str(e)}
+        return fixed_src, info.get("fix") or info.get("reason")
+
+    ex = execute(state, meta, new_src, n, fixer=fixer)
+    mark_idea(meta, n, ex["status"], ex["res"]["val_loss"])
+
+    set_status("reflecting", n, meta.get("title"))
+    try:
+        diff = git("diff", ex["parent"], ex["exp_commit"], "--", TRAIN_REL, check=False)
+        refl = reflect(meta, ex["outcome"], lessons, n, diff)
+        apply_playbook_ops(refl.get("ops"), n)
+        ex["outcome"]["prediction_check"] = refl.get("prediction_check")
+        if ex["res"].get("run_dir"):
+            finish_artifacts(ex["res"], meta, ex["outcome"], ex["parent"], ex["exp_commit"])
+    except Exception as e:  # reflection is useful but never worth losing an experiment over
+        log(f"reflector failed: {e}")
+
+    record(state, meta, ex, n)
     return 0
 
 

@@ -16,7 +16,8 @@ import urllib.error
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TRACE_DIR = os.path.join(ROOT, "harness", "traces")
+TRACE_DIR = os.path.join(os.path.abspath(os.environ["HARNESS_WORKSPACE"]), "traces") if os.environ.get("HARNESS_WORKSPACE") \
+    else os.path.join(ROOT, "harness", "traces")
 
 
 def load_env():

@@ -26,12 +26,14 @@ import urllib.error
 import urllib.request
 
 from harness import llm
+from harness import workspace as wsp
 
 ROOT = llm.ROOT
-MEM = os.path.join(ROOT, "harness", "memory")
+WS = wsp.WS
+MEM = wsp.MEM
 BANK = os.path.join(MEM, "ideas.jsonl")
 PROMPT = os.path.join(ROOT, "harness", "prompts", "researcher.md")
-LOG = os.path.join(ROOT, "harness", "traces", "researcher.log")
+LOG = os.path.join(wsp.TRACES, "researcher.log")
 STOP = os.path.join(ROOT, "harness", "STOP")
 DOMAINS = ["arxiv.org", "openreview.net", "github.com", "huggingface.co"]
 CATEGORIES = {"lr_schedule", "optimizer", "batch_throughput", "model_shape", "architecture", "precision",
@@ -111,7 +113,7 @@ def now():
 
 def loop_state():
     try:
-        with open(os.path.join(ROOT, "results.tsv"), newline="") as f:
+        with open(os.path.join(WS, "results.tsv"), newline="") as f:
             rows = list(csv.DictReader(f, delimiter="\t"))
     except OSError:
         rows = []
@@ -128,11 +130,11 @@ def loop_state():
     src = ""
     if state.get("best_commit"):
         try:
-            src = subprocess.run(["git", "show", f"{state['best_commit']}:train.py"], cwd=ROOT, capture_output=True,
+            src = subprocess.run(["git", "show", f"{state['best_commit']}:{wsp.rel(os.path.join(WS, 'train.py'))}"], cwd=ROOT, capture_output=True,
                                  text=True, timeout=20).stdout
         except (OSError, subprocess.SubprocessError):
             src = ""
-    src = src or read(os.path.join(ROOT, "train.py"))
+    src = src or read(os.path.join(WS, "train.py"))
     hp = [l for l in src.splitlines() if re.match(r"[A-Z][A-Z0-9_]* = ", l) and not re.search(r"[a-z_]\(", l.split("#")[0])]
     return {"rows": rows, "history": state.get("history", []), "best": state.get("best_val_loss"),
             "playbook": read(os.path.join(MEM, "playbook.md")).strip(), "hparams": "\n".join(hp)}

@@ -1,12 +1,15 @@
 """
-Run the research loop: one fresh `python3 -m harness.step` process per experiment.
+Run the research loop with the agent design of your choice. Each design runs in its own workspace
+(workspaces/<design>/: its own train.py, results, runs, memory and traces), so the two never share files or context.
 
-    python3 harness/run.py                   # until stopped
-    python3 harness/run.py --until 16:15     # don't start a new experiment after 4:15 PM local time
-    python3 harness/run.py --max-iters 1     # a single experiment
-    touch harness/STOP                       # finish the current experiment, then stop
+    python3 harness/run.py --design fixed --until 16:15     # planner -> fixer -> reflector, plus a background researcher
+    python3 harness/run.py --design agentic --until 16:15   # one orchestrator decides when to spawn agents, search, read
+    python3 harness/run.py                                  # asks which design to use
+    python3 harness/run.py --design agentic --max-iters 2   # a fixed number of experiments
+    touch harness/STOP                                      # finish the current experiment, then stop
+    HARNESS_FAKE_TRAIN=1 python3 harness/run.py ...         # no GPU: a fake run replaces training (for tests)
 
-All state is in files (see harness/step.py), so the loop can be stopped and restarted at any point.
+A new workspace starts from the root template (the baseline train.py and the frozen prepare.py/inference.py).
 """
 
 import argparse
@@ -17,18 +20,58 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+from harness import workspace as wsp  # noqa: E402
+
 STOP = os.path.join(ROOT, "harness", "STOP")
+ENTRY = {"fixed": "harness.step", "agentic": "harness.agentic"}
+ABOUT = {
+    "fixed": "fixed roles in code: planner -> guards -> run -> fixer on crash -> reflector -> playbook, "
+             "with a background You.com researcher filling an idea bank",
+    "agentic": "model-driven: an orchestrator decides each turn whether to spawn sub-agents (it picks role, task, "
+               "context and model), search, read files, update its notes, or run the experiment",
+}
 
 
 def log(msg):
     print(f"[loop {time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def choose_design(arg):
+    if arg:
+        return arg
+    if not sys.stdin.isatty():
+        raise SystemExit("Choose a design with --design fixed or --design agentic.")
+    print("Which agent design should run?")
+    for i, d in enumerate(wsp.DESIGNS, 1):
+        print(f"  {i}. {d}: {ABOUT[d]}")
+    while True:
+        ans = input("Design [1/2]: ").strip().lower()
+        if ans in ("1", "2"):
+            return wsp.DESIGNS[int(ans) - 1]
+        if ans in wsp.DESIGNS:
+            return ans
+
+
 def main():
     ap = argparse.ArgumentParser(description="Run the autoresearch loop.")
+    ap.add_argument("--design", choices=wsp.DESIGNS, help="fixed (roles in code) or agentic (the model decides)")
+    ap.add_argument("--workspace", help="default: workspaces/<design>")
     ap.add_argument("--until", help="local time HH:MM after which no new experiment starts")
     ap.add_argument("--max-iters", type=int, default=0, help="stop after this many experiments (0 = no limit)")
+    ap.add_argument("--no-researcher", action="store_true", help="fixed design: don't start the background researcher")
     args = ap.parse_args()
+
+    design = choose_design(args.design)
+    ws = wsp.resolve(args.workspace or os.path.join("workspaces", design))
+    if not os.path.exists(os.path.join(ws, "workspace.json")):
+        wsp.create(ws, design)
+        log(f"created workspace {wsp.rel(ws)} from the baseline template")
+    elif wsp.design_of(ws) != design:
+        raise SystemExit(f"{wsp.rel(ws)} belongs to the {wsp.design_of(ws)!r} design; pick another --workspace.")
+    env = {**os.environ, "HARNESS_WORKSPACE": ws, "HARNESS_DESIGN": design}
+    log(f"design: {design} ({ABOUT[design]})")
+    log(f"workspace: {wsp.rel(ws)}" + ("  [FAKE TRAINING: no GPU]" if env.get("HARNESS_FAKE_TRAIN") == "1" else ""))
 
     deadline = None
     if args.until:
@@ -37,28 +80,40 @@ def main():
     if os.path.exists(STOP):
         os.remove(STOP)
 
+    researcher = None
+    if design == "fixed" and not args.no_researcher:
+        out = open(os.path.join(ws, "traces", "researcher-loop.log"), "a")
+        researcher = subprocess.Popen([sys.executable, "-u", "-m", "harness.researcher", "--loop", "--max-searches", "60"],
+                                      cwd=ROOT, env=env, stdout=out, stderr=subprocess.STDOUT)
+        log(f"background researcher started (pid {researcher.pid})")
+
     done = failures = 0
-    while True:
-        if os.path.exists(STOP):
-            log("harness/STOP found; stopping")
-            break
-        if deadline and datetime.datetime.now() >= deadline:
-            log(f"reached --until {args.until}; stopping")
-            break
-        if args.max_iters and done >= args.max_iters:
-            log(f"finished {done} experiment(s)")
-            break
-        rc = subprocess.run([sys.executable, "-m", "harness.step"], cwd=ROOT).returncode
-        done += 1
-        if rc == 0:
-            failures = 0
-            continue
-        failures += 1
-        log(f"iteration exited with {rc} ({failures} failure(s) in a row)")
-        if failures >= 5:
-            log("5 failed iterations in a row; stopping so a human can look")
-            break
-        time.sleep(20)
+    try:
+        while True:
+            if os.path.exists(STOP):
+                log("harness/STOP found; stopping")
+                break
+            if deadline and datetime.datetime.now() >= deadline:
+                log(f"reached --until {args.until}; stopping")
+                break
+            if args.max_iters and done >= args.max_iters:
+                log(f"finished {done} experiment(s)")
+                break
+            rc = subprocess.run([sys.executable, "-m", ENTRY[design]], cwd=ROOT, env=env).returncode
+            done += 1
+            if rc == 0:
+                failures = 0
+                continue
+            failures += 1
+            log(f"iteration exited with {rc} ({failures} failure(s) in a row)")
+            if failures >= 5:
+                log("5 failed iterations in a row; stopping so a human can look")
+                break
+            time.sleep(20)
+    finally:
+        if researcher and researcher.poll() is None:
+            researcher.terminate()
+            log("background researcher stopped")
 
 
 if __name__ == "__main__":

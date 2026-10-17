@@ -8,3 +8,7 @@ run.log
 webui/mock/
 .env
 harness/traces/
+workspaces/*/runs/
+workspaces/*/results.tsv
+workspaces/*/run.log
+workspaces/*/traces/
