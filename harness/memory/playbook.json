@@ -1,5 +1,5 @@
 {
-  "next_id": 9,
+  "next_id": 10,
   "lessons": [
     {
       "id": "L1",
@@ -15,9 +15,9 @@
     },
     {
       "id": "L3",
-      "text": "Widening DiT from 256 to 384 hidden dim regresses val_loss ~1.5%; fewer steps (1525 vs 2719) outweigh capacity (exp 2, 5)",
+      "text": "Widening DiT from 256 to 384 hidden dim regresses val_loss ~1.5%; fewer steps (1525 vs 2719) outweigh capacity; LR 1e-3 recovers more (exp 2, 5, 9)",
       "since": 2,
-      "updated": 5
+      "updated": 9
     },
     {
       "id": "L4",
@@ -48,6 +48,12 @@
       "text": "Lowering AdamW beta2 from 0.99 to 0.95 gives negligible val_loss change (-0.06%) and does not enable warmup removal (exp 7, 8)",
       "since": 7,
       "updated": 8
+    },
+    {
+      "id": "L9",
+      "text": "LR 1e-3 with warmup beats 5e-4 by ~1.5% val_loss and adds steps; adaLN-Zero tolerates higher LR (exp 9)",
+      "since": 9,
+      "updated": 9
     }
   ]
 }
