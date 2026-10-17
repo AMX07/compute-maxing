@@ -8,7 +8,7 @@ The interface for observing and steering autoresearch projects: pick a project, 
 python3 webui/server.py
 ```
 
-Then open http://localhost:8080. The server adds every `workspaces/*` project to the recent list (`~/.autoresearch/projects.json`). Add another project with `--root path/to/project` (repeatable) or with **Open folder** on the home page. A project is a folder with `train.py`, `results.tsv` and `runs/`. Mock data: `python3 webui/make_mock.py`, then `python3 webui/server.py --root webui/mock`.
+Then open http://localhost:8080. The server adds every `workspaces/*` project to the recent list (`~/.autoresearch/projects.json`). Add another project with `--root path/to/project` (repeatable) or with **Open folder** on the home page. A project is a folder with `train.py`, `results.tsv` and `runs/`. Upstream autoresearch projects work too, such as a clone of karpathy/autoresearch: its 5-column `results.tsv` is read by header, the metric is named after its column (`val_bpb`), and kept experiments' diffs come from the clone's git commits, since upstream keeps no run folders. `webui/tools/karpathy_map.py` writes the architecture map for karpathy's `exp/H100/mar8` run. Mock data: `python3 webui/make_mock.py`, then `python3 webui/server.py --root webui/mock`.
 
 ## Pages
 

@@ -1,0 +1,15 @@
+{
+  "metric": "val_bpb",
+  "memory_field": "peak_vram_mb",
+  "memory_scale": 0.0009765625,
+  "frozen": ["prepare.py"],
+  "required": ["evaluate_bpb(model"],
+  "min_values": {},
+  "readable": ["train.py", "prepare.py", "program.md", "run.log", "results.tsv", "memory/notes.md"],
+  "train_command": "uv run train.py",
+  "remote": {"host": null, "dir": "~/autoresearch", "sync": ["train.py"]},
+  "run_timeout": 600,
+  "train_slack": 60,
+  "push": null,
+  "fake_base": 0.9979
+}

@@ -32,7 +32,8 @@ ROOT = llm.ROOT
 WS = wsp.WS
 MEM = wsp.MEM
 BANK = os.path.join(MEM, "ideas.jsonl")
-PROMPT = os.path.join(ROOT, "harness", "prompts", "researcher.md")
+PROMPT = wsp.prompt_path("researcher")       # the project's own prompts/researcher.md if it has one
+M = wsp.METRIC
 LOG = os.path.join(wsp.TRACES, "researcher.log")
 STOP = os.path.join(ROOT, "harness", "STOP")
 DOMAINS = ["arxiv.org", "openreview.net", "github.com", "huggingface.co"]
@@ -130,7 +131,7 @@ def loop_state():
     src = ""
     if state.get("best_commit"):
         try:
-            src = subprocess.run(["git", "show", f"{state['best_commit']}:{wsp.rel(os.path.join(WS, 'train.py'))}"], cwd=ROOT, capture_output=True,
+            src = subprocess.run(["git", "show", f"{state['best_commit']}:{wsp.rel(os.path.join(WS, 'train.py'))}"], cwd=wsp.GIT_ROOT, capture_output=True,
                                  text=True, timeout=20).stdout
         except (OSError, subprocess.SubprocessError):
             src = ""
@@ -141,9 +142,9 @@ def loop_state():
 
 
 def state_text(st, bank):
-    out = [f"Best val_loss so far: {st['best']}"]
+    out = [f"Best {M} so far: {st['best']}"]
     out.append("## Experiments (results.tsv)\n" + ("\n".join(
-        f"- {r.get('status', '?')} | val_loss {r.get('val_loss', '?')} | {r.get('description', '')}" for r in st["rows"])
+        f"- {r.get('status', '?')} | {M} {r.get(M, r.get('val_loss', '?'))} | {r.get('description', '')}" for r in st["rows"])
         or "(none yet)"))
     hist = [h for h in st["history"] if h.get("category") != "baseline"]
     if hist:

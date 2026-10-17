@@ -50,7 +50,7 @@ def safe_path(rel):
     if not path.startswith(ws + os.sep) or not os.path.isfile(path):
         return None
     name = os.path.relpath(path, ws)
-    ok = name in ("train.py", "prepare.py", "inference.py", "program.md", "run.log", "results.tsv", "memory/notes.md") \
+    ok = name in wsp.PROFILE["readable"] \
         or re.fullmatch(r"runs/[\w.-]+/(metrics\.json|change\.diff|idea\.json)", name)
     return path if ok else None
 
@@ -58,8 +58,8 @@ def safe_path(rel):
 def read_file(rel):
     path = safe_path(rel)
     if not path:
-        return f"Not readable: {rel!r}. Allowed: train.py, prepare.py, inference.py, program.md, run.log, results.tsv, " \
-               "memory/notes.md, runs/<run_id>/metrics.json|change.diff|idea.json."
+        return f"Not readable: {rel!r}. Allowed: {', '.join(wsp.PROFILE['readable'])}, " \
+               "runs/<run_id>/metrics.json|change.diff|idea.json."
     text = read(path)
     if rel.strip().endswith("run.log"):
         text = "\n".join(re.split(r"[\r\n]", text)[-80:])
@@ -85,7 +85,7 @@ def run_agent(spec, k, n, state, src):
     model_key = str(spec.get("model") or "flash").lower()
     model = MODELS.get(model_key, MODELS["flash"])
     items = [str(c) for c in (spec.get("context") or [])][:5]
-    messages = [{"role": "system", "content": read(os.path.join(PROMPTS, "subagent.md")).replace("{role}", role)},
+    messages = [{"role": "system", "content": read(wsp.prompt_path("subagent")).replace("{role}", role)},
                 {"role": "user", "content": f"## Task\n\n{task}\n\n" + "\n\n".join(context_item(c, state, src) for c in items)}]
     try:
         reply = llm.strip_thinking(llm.chat(messages, "subagent", f"exp{n:03d}-a{k}", temperature=0.4,
@@ -139,7 +139,7 @@ def opening(state, n, src):
     last = state.get("last_outcome")
     parts = [f"## program.md\n\n{read(os.path.join(wsp.WS, 'program.md'))}",
              f"## Your notes (memory/notes.md)\n\n{read_opt(NOTES) or '(empty: this is your first experiment or you have not written notes yet)'}",
-             f"## Experiment log\n\n{step.experiment_log(state)}\n\nCurrent best val_loss: {state['best_val_loss']}"]
+             f"## Experiment log\n\n{step.experiment_log(state)}\n\nCurrent best {step.M}: {state['best_val_loss']}"]
     if last:
         parts.append(f"## Last experiment's outcome\n\n```json\n{json.dumps(last, indent=1)[:3000]}\n```")
     parts.append(f"## Current train.py (the best version so far)\n\n```python\n{src}\n```")
@@ -148,7 +148,7 @@ def opening(state, n, src):
 
 
 def orchestrate(state, n, src):
-    system = read(os.path.join(PROMPTS, "orchestrator.md")).replace("{max_turns}", str(MAX_TURNS)).replace(
+    system = read(wsp.prompt_path("orchestrator")).replace("{max_turns}", str(MAX_TURNS)).replace(
         "{max_agents}", str(MAX_AGENTS))
     messages = [{"role": "system", "content": system}, {"role": "user", "content": opening(state, n, src)}]
     agents, actions = [], []
@@ -223,7 +223,7 @@ def main():
     if started is None:
         return 0 if step.read_results() else 1
     state, n, src = started
-    log(f"experiment #{n}: orchestrating (best val_loss {state['best_val_loss']:.6f})")
+    log(f"experiment #{n}: orchestrating (best {step.M} {state['best_val_loss']:.6f})")
     set_status("planning", n)
     meta, new_src = orchestrate(state, n, src)
     if meta is None:

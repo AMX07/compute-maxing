@@ -31,8 +31,10 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from harness import llm  # noqa: E402
+from harness import workspace as wsp  # noqa: E402
 
-PROMPT = os.path.join(ROOT, "harness", "prompts", "mapper.md")
+PROMPT = os.path.join(ROOT, "harness", "prompts", "mapper.md")   # a project's own prompts/mapper.md wins (main)
+METRIC = "val_loss"              # the project's metric name, from its project.json (main)
 STATUSES = ("validated", "invalidated", "inconclusive", "untested")
 ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,23}$")
 BATCH = 4            # experiments per call when catching up on several
@@ -88,10 +90,17 @@ def experiments(ws):
     experiment before it (`ref`), for notes like "steps 2719 → 1525"."""
     state = load_json(os.path.join(ws, "memory", "state.json"), {}) or {}
     hist = {h.get("n"): h for h in state.get("history", []) if isinstance(h, dict)}
-    rows = [l.split("\t") for l in read(os.path.join(ws, "results.tsv")).splitlines()[1:]]
+    lines = read(os.path.join(ws, "results.tsv")).splitlines()
+    cols = [c.strip() for c in lines[0].split("\t")] if lines else []
+    has_run = "run_id" in cols                     # upstream autoresearch's results.tsv has no run_id column
+    width = 6 if has_run else 5
+    rows = [l.split("\t", width - 1) for l in lines[1:]]
     exps, best = [], None
-    for n, parts in enumerate(r for r in rows if len(r) >= 6):   # numbered like step.read_results()
-        commit, val, _mem, status, run_id, desc = parts[:6]
+    for n, parts in enumerate(r for r in rows if len(r) >= width):   # numbered like step.read_results()
+        if has_run:
+            commit, val, _mem, status, run_id, desc = parts[:6]
+        else:
+            (commit, val, _mem, status, desc), run_id = parts[:5], "-"
         run = os.path.join(ws, "runs", run_id) if run_id not in ("", "-") else None
         idea = (load_json(os.path.join(run, "idea.json"), {}) if run else {}) or {}
         outcome, h = idea.get("outcome") or {}, hist.get(n, {})
@@ -125,12 +134,13 @@ def load_ideas(ws):
 
 def baseline_src(ws, exps):
     """The train.py the baseline ran: its run's copy, else the workspace's train.py at the baseline commit, else the
-    root train.py (the template every workspace starts from)."""
+    root train.py (the template every workspace in this repo starts from; never for an outside project)."""
     b = exps[0] if exps else {}
     if b.get("run") and os.path.exists(os.path.join(b["run"], "train.py")):
         return read(os.path.join(b["run"], "train.py"))
     src = git(ws, "show", f"{b['commit']}:./train.py") if b.get("commit") else ""
-    return src or read(os.path.join(ROOT, "train.py")) or read(os.path.join(ws, "train.py"))
+    template = read(os.path.join(ROOT, "train.py")) if os.path.dirname(ws) == os.path.join(ROOT, "workspaces") else ""
+    return src or template or read(os.path.join(ws, "train.py"))
 
 
 def diff_of(ws, e):
@@ -148,7 +158,8 @@ def diff_of(ws, e):
 def run_numbers(e):
     m, r = e["metrics"], (e["ref"] or {}).get("metrics", {})
     out = []
-    for key, name, unit in (("num_steps", "steps", ""), ("num_params_M", "params", "M"), ("peak_memory_gb", "memory", " GB")):
+    for key, name, unit in (("num_steps", "steps", ""), ("num_params_M", "params", "M"), ("peak_memory_gb", "memory", " GB"),
+                            ("peak_vram_mb", "memory", " MB")):
         if m.get(key):  # fake runs report 0
             out.append(f"{name} {m[key]}{unit}" + (f" (best before: {r[key]}{unit})" if r.get(key) else ""))
     return ", ".join(out)
@@ -159,11 +170,11 @@ def experiment_text(ws, e):
     if e["description"] and e["description"] != e["title"]:
         lines.append(f"Description: {e['description']}")
     if e["val_loss"]:
-        res = f"val_loss {e['val_loss']:.6f}"
+        res = f"{METRIC} {e['val_loss']:.6f}"
         if e["delta"] is not None:
             res += f" ({e['delta']:+.2f}% vs the best before" + (f", {e['ref']['val_loss']:.6f}" if e["ref"] else "") + ")"
     else:
-        res = "crashed, no val_loss"
+        res = f"crashed, no {METRIC}"
     if isinstance(e["predicted"], (int, float)):
         res += f"; predicted {e['predicted']:+.2f}%"
     lines.append(f"Result: {res}")
@@ -184,7 +195,7 @@ def experiment_text(ws, e):
 def components_prompt(ws, exps):
     b = exps[0]
     m = b["metrics"]
-    facts = [f"val_loss {b['val_loss']}" if b["val_loss"] else None,
+    facts = [f"{METRIC} {b['val_loss']}" if b["val_loss"] else None,
              f"{m['num_params_M']}M params" if m.get("num_params_M") else None,
              f"{m['num_steps']} steps" if m.get("num_steps") else None,
              f"{m['training_seconds']:.0f} s of training" if m.get("training_seconds") else None,
@@ -456,7 +467,7 @@ def update(ws, dry_run=False):
         except RuntimeError as e:
             log(f"{e}; will try again next time")
             return 1
-        steps.append(lambda a, rep=rep: merge_components(a, rep, {"name": "val_loss", "goal": "min"}))
+        steps.append(lambda a, rep=rep: merge_components(a, rep, {"name": METRIC, "goal": "min"}))
         arch = steps[-1](arch)
         if not arch.get("components"):
             log("the reply had no usable components; will try again next time")
@@ -518,6 +529,10 @@ def main():
     if not os.path.isdir(ws):
         raise SystemExit(f"{ws} is not a directory")
     llm.TRACE_DIR = os.path.join(ws, "traces")   # this workspace's traces, whatever HARNESS_WORKSPACE says
+    global PROMPT, METRIC
+    METRIC = wsp.load_profile(ws)["metric"]
+    if os.path.exists(os.path.join(ws, "prompts", "mapper.md")):
+        PROMPT = os.path.join(ws, "prompts", "mapper.md")
     return update(ws, args.dry_run)
 
 

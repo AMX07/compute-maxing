@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -36,20 +37,20 @@ WS = wsp.WS                      # this design's workspace: train.py, results.ts
 MEM = wsp.MEM
 STATE = os.path.join(MEM, "state.json")
 PLAYBOOK = os.path.join(MEM, "playbook.json")
-PROMPTS = os.path.join(ROOT, "harness", "prompts")
+PROFILE = wsp.PROFILE             # how this project trains and is scored (workspace.py, <workspace>/project.json)
+M = wsp.METRIC                   # the metric's name, e.g. val_loss or val_bpb; lower is better
 TRAIN = os.path.join(WS, "train.py")
 RESULTS = os.path.join(WS, "results.tsv")
 RUN_LOG = os.path.join(WS, "run.log")
 RUNS = os.path.join(WS, "runs")
 ARCH = os.path.join(WS, "architecture.json")       # the web UI's component map, kept by harness/map_architecture.py
 TRAIN_REL, MEM_REL, ARCH_REL = wsp.rel(TRAIN), wsp.rel(MEM), wsp.rel(ARCH)   # for git
-HEADER = "commit\tval_loss\tmemory_gb\tstatus\trun_id\tdescription\n"
+COLUMNS = ["commit", M, "memory_gb", "status", "run_id", "description"]   # a new results.tsv; an existing one keeps its own
 
-FROZEN = ["prepare.py", "inference.py"]
-RUN_TIMEOUT = 6 * 60             # kill a run after this long (program.md)
-TRAIN_SLACK = 100                # seconds allowed on top of TIME_BUDGET for startup, compile steps and eval
-SAMPLE_LIMIT = 120               # seconds allowed for the 16 benchmark images
-MIN_CAPTION_DROPOUT = 0.1
+FROZEN = PROFILE["frozen"]
+RUN_TIMEOUT = PROFILE["run_timeout"]       # kill a run after this long (program.md)
+TRAIN_SLACK = PROFILE["train_slack"]       # seconds allowed on top of TIME_BUDGET for startup, compile steps and eval
+SAMPLE_LIMIT = 120               # seconds allowed for the 16 benchmark images (projects that sample)
 MAX_LESSONS = 25
 STUCK_AFTER = 4                  # discards in a row before the planner is told to switch category
 MAP_TIMEOUT = 300                # seconds for the architecture map update after an experiment
@@ -71,7 +72,7 @@ def set_status(phase, n, title=None, **extra):
 
 def git(*args, check=True):
     for _ in range(20):  # another process (the researcher, a human) may hold the index lock for a moment
-        r = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
+        r = subprocess.run(["git", *args], cwd=wsp.GIT_ROOT, capture_output=True, text=True)
         if r.returncode == 0 or "index.lock" not in r.stderr:
             break
         time.sleep(0.5)
@@ -101,18 +102,20 @@ def secret_values():
 
 
 def push_safely():
-    """Push main to origin so GitHub shows the experiment history live. Refuses if the outgoing commits touch .env
-    or any git-ignored path, or contain a secret value. Never raises and never force-pushes."""
+    """Push the profile's branch (main here) to origin so GitHub shows the experiment history live. Projects with
+    "push": null (someone else's repo) are never pushed. Refuses if the outgoing commits touch .env or any
+    git-ignored path, or contain a secret value. Never raises and never force-pushes."""
+    branch = PROFILE.get("push")
     try:
-        if not git("remote", check=False):
+        if not branch or not git("remote", check=False):
             return
-        upstream = git("rev-parse", "--verify", "-q", "origin/main", check=False) or None
+        upstream = git("rev-parse", "--verify", "-q", f"origin/{branch}", check=False) or None
         rng = f"{upstream}..HEAD" if upstream else "HEAD"
         files = [f for f in git("log", rng, "--name-only", "--format=", check=False).splitlines() if f.strip()]
         if not files and upstream:
             return  # nothing new
         bad = [f for f in set(files) if os.path.basename(f) == ".env" or
-               subprocess.run(["git", "check-ignore", "--no-index", "-q", f], cwd=ROOT).returncode == 0]
+               subprocess.run(["git", "check-ignore", "--no-index", "-q", f], cwd=wsp.GIT_ROOT).returncode == 0]
         if bad:
             log(f"push refused: outgoing commits touch ignored/secret paths: {sorted(bad)}")
             return
@@ -120,8 +123,9 @@ def push_safely():
         if any(v in patch for v in secret_values()):
             log("push refused: outgoing commits contain a secret value")
             return
-        r = subprocess.run(["git", "push", "-q", "origin", "main"], cwd=ROOT, capture_output=True, text=True, timeout=90)
-        log("pushed to origin/main" if r.returncode == 0 else f"push failed (will retry next experiment): {r.stderr.strip()[:200]}")
+        r = subprocess.run(["git", "push", "-q", "origin", branch], cwd=wsp.GIT_ROOT, capture_output=True, text=True,
+                           timeout=90)
+        log(f"pushed to origin/{branch}" if r.returncode == 0 else f"push failed (will retry next experiment): {r.stderr.strip()[:200]}")
     except Exception as e:  # noqa: BLE001  a push problem must never cost an experiment
         log(f"push skipped: {e}")
 
@@ -165,23 +169,40 @@ def time_budget():
 # results.tsv
 # ---------------------------------------------------------------------------
 
+def results_columns():
+    """results.tsv's columns from its header. Upstream autoresearch has no run_id column; this harness adds one."""
+    if os.path.exists(RESULTS):
+        head = read(RESULTS).split("\n", 1)[0].split("\t")
+        if head and head[0].strip().lower() == "commit":
+            return [c.strip() for c in head]
+    return COLUMNS
+
+
 def read_results():
+    """Rows as dicts. The metric (the second column, whatever its name) is under "val_loss"."""
     if not os.path.exists(RESULTS):
         return []
+    cols = results_columns()
+    keys = ["commit", "val_loss"] + cols[2:]
     rows = []
     for line in read(RESULTS).splitlines()[1:]:
-        parts = line.split("\t")
-        if len(parts) >= 6:
-            rows.append(dict(zip(["commit", "val_loss", "memory_gb", "status", "run_id", "description"], parts)))
+        parts = line.split("\t", len(keys) - 1)
+        if len(parts) >= len(keys):
+            row = dict(zip(keys, parts))
+            row.setdefault("run_id", "-")
+            rows.append(row)
     return rows
 
 
 def append_result(commit_hash, val_loss, memory_gb, status, run_id, description):
     if not os.path.exists(RESULTS):
-        write(RESULTS, HEADER)
+        write(RESULTS, "\t".join(COLUMNS) + "\n")
+    cols = results_columns()
     desc = re.sub(r"\s+", " ", description).strip()[:120]
+    vals = {"commit": commit_hash[:7], "memory_gb": f"{memory_gb or 0:.1f}", "status": status, "run_id": run_id or "-",
+            "description": desc}
     with open(RESULTS, "a") as f:
-        f.write(f"{commit_hash[:7]}\t{val_loss or 0:.6f}\t{memory_gb or 0:.1f}\t{status}\t{run_id or '-'}\t{desc}\n")
+        f.write("\t".join([vals["commit"], f"{val_loss or 0:.6f}"] + [vals.get(c, "-") for c in cols[2:]]) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -327,31 +348,34 @@ def validate(src):
         problems.append(f"`{name}` is used (line {line}) but never defined or imported")
     for chain in missing_mlx_apis(tree):
         problems.append(f"`{chain}` does not exist in the installed MLX")
+    modules = {os.path.splitext(f)[0] for f in FROZEN if f.endswith(".py")}    # e.g. prepare, inference
     imported = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module in ("prepare", "inference"):
+        if isinstance(node, ast.ImportFrom) and node.module in modules:
             imported |= {a.asname or a.name for a in node.names}
     for node in ast.walk(tree):
         targets = []
         if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name in imported:
-            problems.append(f"redefines `{node.name}`, which is imported from prepare/inference")
+            problems.append(f"redefines `{node.name}`, which is imported from {'/'.join(sorted(modules))}")
         for t in targets:
             for n in ast.walk(t):
                 if isinstance(n, ast.Name) and n.id in imported:
-                    problems.append(f"reassigns `{n.id}`, which is imported from prepare/inference")
-                if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id in ("prepare", "inference"):
+                    problems.append(f"reassigns `{n.id}`, which is imported from {'/'.join(sorted(modules))}")
+                if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id in modules:
                     problems.append(f"assigns to `{n.value.id}.{n.attr}`")
         if isinstance(node, ast.Call):
             for a in list(node.args) + [k.value for k in node.keywords]:
                 if isinstance(a, ast.Constant) and a.value in ("test", "val"):
                     problems.append("reads the held-out split, which only the evaluation may use")
-    m = re.search(r"^CAPTION_DROPOUT\s*=\s*([0-9.eE+-]+)", src, re.M)
-    if not m or float(m.group(1)) < MIN_CAPTION_DROPOUT:
-        problems.append(f"CAPTION_DROPOUT must stay >= {MIN_CAPTION_DROPOUT} (lowering it games val_loss and breaks guidance)")
-    if "evaluate_loss(model" not in src or "save_run(" not in src:
-        problems.append("the final evaluate_loss(model) and save_run(...) calls must stay")
+    for name, floor in (PROFILE.get("min_values") or {}).items():
+        m = re.search(rf"^{re.escape(name)}\s*=\s*([0-9.eE+-]+)", src, re.M)
+        if not m or float(m.group(1)) < floor:
+            problems.append(f"{name} must stay >= {floor} (lowering it games {M})")
+    missing = [snip for snip in PROFILE.get("required") or [] if snip not in src]
+    if missing:
+        problems.append("the evaluation calls must stay: " + ", ".join(f"`{snip}`" for snip in missing))
     return sorted(set(problems))
 
 
@@ -392,8 +416,9 @@ FAKE_TRAIN = os.environ.get("HARNESS_FAKE_TRAIN") == "1"
 
 
 class FakeRun:
-    """No-GPU stand-in for tests (HARNESS_FAKE_TRAIN=1). Writes a run folder and run.log the way train.py does,
-    with a val_loss derived from the code, so every other step of the pipeline runs for real."""
+    """No-GPU stand-in for tests (HARNESS_FAKE_TRAIN=1). Writes run.log the way train.py does, with a metric derived
+    from the code, so every other step of the pipeline runs for real. Like the real train.py, it writes its own run
+    folder only in projects whose train.py calls save_run(); otherwise the harness makes one from the summary."""
     def __init__(self, out):
         src = read(TRAIN)
         try:
@@ -403,39 +428,94 @@ class FakeRun:
             self.returncode = 1
             return
         h = int(hashlib.sha256(src.encode()).hexdigest()[:8], 16)
-        base = (load_json(STATE, {}) or {}).get("best_val_loss") or 0.1838
+        base = (load_json(STATE, {}) or {}).get("best_val_loss") or PROFILE["fake_base"]
         val = round(base * (0.985 + (h % 400) / 10000), 6)        # between -1.5% and +2.5% of the best
+        out.write(f"FAKE RUN (no GPU)\n---\n{M + ':':<18}{val:.6f}\ntraining_seconds: 0.0\n"
+                  f"{PROFILE['memory_field'] + ':':<18}0.0\nnum_steps:        0\n")
+        self.returncode = 0
+        if "save_run(" not in src:
+            return
         run_id = time.strftime("%Y%m%d-%H%M%S")
         run_dir = os.path.join(RUNS, run_id)
         while os.path.exists(run_dir):
             run_dir += "x"
         os.makedirs(run_dir)
         metrics = {"run_id": os.path.basename(run_dir), "commit": git("rev-parse", "--short=7", "HEAD", check=False),
-                   "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "val_loss": val, "training_seconds": 0.0,
+                   "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"), M: val, "training_seconds": 0.0,
                    "total_seconds": 0.0, "peak_memory_gb": 0.0, "num_steps": 0, "num_params_M": 0.0, "fake": True}
         save_json(os.path.join(run_dir, "metrics.json"), metrics)
         write(os.path.join(run_dir, "train.py"), src)
-        out.write(f"FAKE RUN (no GPU)\n---\nval_loss:         {val:.6f}\npeak_memory_gb:   0.0\nnum_steps:        0\n"
-                  f"run_dir:          {run_dir}\n")
-        self.returncode = 0
+        out.write(f"run_dir:          {run_dir}\n")
+
+
+def train_command(out):
+    """The command that trains, as an argv list. With a "remote" profile, the synced files are copied to the GPU
+    host first and training runs there over ssh, under the same timeout. Returns None if the copy fails."""
+    cmd = PROFILE["train_command"]
+    remote = PROFILE.get("remote") or {}
+    if not remote.get("host"):
+        return shlex.split(cmd)
+    host, rdir = remote["host"], remote.get("dir") or "~/autoresearch"
+    for name in remote.get("sync") or ["train.py"]:
+        r = subprocess.run(["scp", "-q", "-o", "BatchMode=yes", os.path.join(WS, name), f"{host}:{rdir}/{name}"],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode:
+            out.write(f"could not copy {name} to {host}:{rdir}: {r.stderr.strip()}\n")
+            return None
+    return ["ssh", "-o", "BatchMode=yes", host, f"cd {rdir} && timeout {RUN_TIMEOUT} {cmd}"]
+
+
+def summary_block(text):
+    """The "key: value" lines train.py prints after its last "---" line, as a dict of numbers (or strings)."""
+    tail = text.rsplit("\n---\n", 1)[-1] if "\n---\n" in text else ""
+    out = {}
+    for line in tail.splitlines():
+        m = re.match(r"^([A-Za-z_][\w]*):\s+(\S+)\s*$", line)
+        if m:
+            v = m.group(2).replace(",", "")
+            try:
+                out[m.group(1)] = float(v) if re.search(r"[.eE]", v) else int(v)
+            except ValueError:
+                out[m.group(1)] = v
+    return out
+
+
+def make_run_dir(text):
+    """For a train.py that keeps no run folder (upstream autoresearch): runs/<run_id>/ with metrics.json from the
+    summary block and a copy of the train.py that ran, so the web UI and the map see every experiment."""
+    run_id = time.strftime("%Y%m%d-%H%M%S")
+    run_dir = os.path.join(RUNS, run_id)
+    while os.path.exists(run_dir):
+        run_dir += "x"
+    os.makedirs(run_dir)
+    metrics = {"run_id": os.path.basename(run_dir), "commit": git("rev-parse", "--short=7", "HEAD", check=False),
+               "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"), **summary_block(text), "made_by": "harness"}
+    save_json(os.path.join(run_dir, "metrics.json"), metrics)
+    write(os.path.join(run_dir, "train.py"), read(TRAIN))
+    return run_dir
 
 
 def run_training():
-    log("training (uv run train.py > run.log)" + (" [FAKE, no GPU]" if FAKE_TRAIN else ""))
+    remote = (PROFILE.get("remote") or {}).get("host")
+    log(f"training ({PROFILE['train_command']}{' on ' + remote if remote else ''} > run.log)"
+        + (" [FAKE, no GPU]" if FAKE_TRAIN else ""))
     start = time.time()
     timed_out = False
+    returncode = 1
     with open(RUN_LOG, "w") as out:
         if FAKE_TRAIN:
-            proc = FakeRun(out)
+            returncode = FakeRun(out).returncode
         else:
-            proc = subprocess.Popen(["uv", "run", "train.py"], cwd=WS, stdout=out, stderr=subprocess.STDOUT,
-                                    start_new_session=True)
-            try:
-                proc.wait(timeout=RUN_TIMEOUT)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                os.killpg(proc.pid, signal.SIGKILL)
-                proc.wait()
+            argv = train_command(out)
+            if argv:
+                proc = subprocess.Popen(argv, cwd=WS, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+                try:
+                    proc.wait(timeout=RUN_TIMEOUT + (30 if remote else 0))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    proc.wait()
+                returncode = proc.returncode
     text = read(RUN_LOG) if os.path.exists(RUN_LOG) else ""
 
     def field(name):
@@ -447,17 +527,23 @@ def run_training():
         fresh = [os.path.join(RUNS, d) for d in os.listdir(RUNS)] if os.path.isdir(RUNS) else []
         fresh = [d for d in fresh if os.path.isdir(d) and birthtime(d) >= start - 1]
         run_dir = max(fresh, key=birthtime) if fresh else None
+    made = False
+    if not run_dir and field(M):
+        run_dir, made = make_run_dir(text), True
     metrics = load_json(os.path.join(run_dir, "metrics.json"), {}) if run_dir else {}
-    val_loss = field("val_loss") or metrics.get("val_loss")
+    val_loss = field(M) or metrics.get(M)
+    memory = field(PROFILE["memory_field"]) or metrics.get(PROFILE["memory_field"]) or 0
+    # A run folder made after the run says nothing about timing; use the training time train.py reports instead.
+    wall = (metrics.get("training_seconds") if made else round(birthtime(run_dir) - start, 1)) if run_dir else None
     res = {
-        "returncode": proc.returncode, "timed_out": timed_out, "seconds": round(time.time() - start, 1),
+        "returncode": returncode, "timed_out": timed_out, "seconds": round(time.time() - start, 1),
         "run_dir": run_dir, "run_id": os.path.basename(run_dir) if run_dir else None, "metrics": metrics,
         "val_loss": float(val_loss) if val_loss else None,
-        "memory_gb": float(field("peak_memory_gb") or metrics.get("peak_memory_gb") or 0),
-        "train_wall": round(birthtime(run_dir) - start, 1) if run_dir else None,
+        "memory_gb": round(float(memory) * PROFILE["memory_scale"], 1),
+        "train_wall": wall,
         "tail": "\n".join(re.split(r"[\r\n]", text)[-60:])[-6000:],
     }
-    log(f"run finished in {res['seconds']}s: val_loss={res['val_loss']} rc={proc.returncode}"
+    log(f"run finished in {res['seconds']}s: {M}={res['val_loss']} rc={returncode}"
         f"{' TIMEOUT' if timed_out else ''} run_dir={res['run_id']}")
     return res
 
@@ -477,7 +563,7 @@ def violations(res, budget):
 # ---------------------------------------------------------------------------
 
 def experiment_log(state):
-    lines = ["#  | status  | val_loss | vs best before | predicted | category | description"]
+    lines = [f"#  | status  | {M} | vs best before | predicted | category | description"]
     hist = {h["n"]: h for h in state["history"]}
     for i, r in enumerate(read_results()):
         h = hist.get(i, {})
@@ -521,8 +607,8 @@ def planner_messages(state, src, lessons, n):
         f"{read(os.path.join(WS, 'program.md'))}",
         f"## Playbook: lessons so far\n\n{render_playbook(lessons)}",
         idea_bank_text(),
-        f"## Experiment log (results.tsv; 'vs best before' is the change against the best kept val_loss at that time)\n\n"
-        f"{experiment_log(state)}\n\nCurrent best val_loss: {state['best_val_loss']}",
+        f"## Experiment log (results.tsv; 'vs best before' is the change against the best kept {M} at that time)\n\n"
+        f"{experiment_log(state)}\n\nCurrent best {M}: {state['best_val_loss']}",
     ]
     recent = state["history"][-STUCK_AFTER:]
     if state["consecutive_discards"] >= STUCK_AFTER:
@@ -532,7 +618,7 @@ def planner_messages(state, src, lessons, n):
     parts = [p for p in parts if p]
     parts.append(f"## Current train.py (the best version so far)\n\n```python\n{src}\n```")
     parts.append(f"Propose experiment #{n}. Follow the reply format exactly.")
-    return [{"role": "system", "content": read(os.path.join(PROMPTS, "planner.md"))},
+    return [{"role": "system", "content": read(wsp.prompt_path("planner"))},
             {"role": "user", "content": "\n\n".join(parts)}]
 
 
@@ -563,7 +649,7 @@ def propose(state, src, lessons, n):
 
 
 def fix(src, meta, res, n):
-    messages = [{"role": "system", "content": read(os.path.join(PROMPTS, "fixer.md"))},
+    messages = [{"role": "system", "content": read(wsp.prompt_path("fixer"))},
                 {"role": "user", "content": f"## The idea\n\n{json.dumps(meta, indent=1)}\n\n## Crash output (end of run.log)\n\n"
                                             f"```\n{res['tail']}\n```\n\n## Current train.py (with the idea applied)\n\n```python\n{src}\n```"}]
     reply = llm.chat(messages, "fixer", f"exp{n:03d}", temperature=0.2)
@@ -584,7 +670,7 @@ def fix(src, meta, res, n):
 
 
 def reflect(meta, outcome, lessons, n, diff=""):
-    messages = [{"role": "system", "content": read(os.path.join(PROMPTS, "reflector.md"))},
+    messages = [{"role": "system", "content": read(wsp.prompt_path("reflector"))},
                 {"role": "user", "content": f"## Playbook\n\n{render_playbook(lessons)}\n\n## Experiment #{n}\n\n"
                                             f"Idea and prediction:\n{json.dumps(meta, indent=1)}\n\nThe code change that actually ran:\n"
                                             f"```diff\n{diff[:6000]}\n```\n\nOutcome:\n{json.dumps(outcome, indent=1)}"}]
@@ -623,8 +709,8 @@ def update_map(n, title=None):
 def run_baseline(state, budget):
     log("no results yet: running the unmodified train.py as the baseline")
     # A new workspace's files must be in git before anything can be restored from best_commit.
-    files = [wsp.rel(os.path.join(WS, f)) for f in ("train.py", "prepare.py", "inference.py", "program.md", "workspace.json")
-             if os.path.exists(os.path.join(WS, f))]
+    files = [wsp.rel(os.path.join(WS, f)) for f in ("train.py", *FROZEN, "program.md", "workspace.json", "project.json",
+                                                    "prompts") if os.path.exists(os.path.join(WS, f))]
     commit(f"workspace {os.path.basename(WS)}: baseline files\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>", files)
     state["frozen"] = {p: sha(p) for p in FROZEN}
     set_status("training", 0, "Baseline")
@@ -642,12 +728,12 @@ def run_baseline(state, budget):
     state["history"].append({"n": 0, "title": "Baseline", "category": "baseline", "status": "keep",
                              "val_loss": res["val_loss"], "run_id": res["run_id"], "commit": head[:7]})
     save_json(STATE, state)
-    apply_playbook_ops([{"op": "add", "text": f"Baseline: val_loss {res['val_loss']:.4f} in "
+    apply_playbook_ops([{"op": "add", "text": f"Baseline: {M} {res['val_loss']:.4f} in "
                          f"{res['metrics'].get('num_steps', '?')} steps at {res['metrics'].get('num_params_M', '?')}M params (exp 0)"}], 0)
     paths = update_map(0, "Baseline")
     commit("harness: baseline recorded\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>", paths)
     push_safely()
-    log(f"baseline val_loss {res['val_loss']:.6f}")
+    log(f"baseline {M} {res['val_loss']:.6f}")
     return 0
 
 
@@ -722,7 +808,7 @@ def record(state, meta, ex, n, **extra):
     state["last_outcome"] = {"n": n, "title": meta.get("title"), **{k: v for k, v in outcome.items() if v is not None}}
     save_json(STATE, state)
     paths = update_map(n, meta.get("title"))
-    commit(f"harness: exp {n} {status}" + (f" val_loss {res['val_loss']:.6f}" if res["val_loss"] else "")
+    commit(f"harness: exp {n} {status}" + (f" {M} {res['val_loss']:.6f}" if res["val_loss"] else "")
            + "\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>", paths)
     push_safely()
     set_status("idle", n + 1)
@@ -750,7 +836,7 @@ def main():
     state, n, src = started
     lessons = load_json(PLAYBOOK, {"lessons": []})["lessons"]
 
-    log(f"experiment #{n}: planning (best val_loss {state['best_val_loss']:.6f})")
+    log(f"experiment #{n}: planning (best {M} {state['best_val_loss']:.6f})")
     set_status("planning", n)
     meta, new_src = propose(state, src, lessons, n)
     if meta is None:

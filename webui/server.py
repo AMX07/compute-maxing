@@ -398,9 +398,15 @@ def project_card(pid, entry):
             "has_map": os.path.exists(os.path.join(root, "architecture.json")), "live": bool(live)}
 
 
+def in_repo(root):
+    return os.path.dirname(os.path.abspath(root)) == os.path.join(REPO, "workspaces")
+
+
 def managed(root):
-    """True if the repo's harness can run this project (it lives under <repo>/workspaces/)."""
-    return os.path.isdir(HARNESS) and os.path.dirname(os.path.abspath(root)) == os.path.join(REPO, "workspaces")
+    """True if this repo's harness can run the project: one of its workspaces, or an outside project that has been
+    set up for it (workspace.json with a design, and usually a project.json saying how to train and score it)."""
+    design = (read_json(os.path.join(root, "workspace.json")) or {}).get("design")
+    return os.path.isdir(HARNESS) and (in_repo(root) or design in DESIGNS)
 
 
 def tail(path, n=60):
@@ -463,9 +469,12 @@ def agents_state(root):
 
 
 def start_loop(root, design, until=None, max_iters=0):
-    """Start harness/run.py for a design. A design runs in its own workspace, so another design starts a new one."""
-    ws = os.path.abspath(root) if (read_json(os.path.join(root, "workspace.json")) or {}).get("design") == design \
-        else os.path.join(REPO, "workspaces", design)
+    """Start harness/run.py for a design. A design runs in its own workspace, so another design starts a new one
+    (in this repo's workspaces/; an outside project runs only the design it was set up with)."""
+    own = (read_json(os.path.join(root, "workspace.json")) or {}).get("design")
+    if own != design and not in_repo(root):
+        raise ValueError(f"this project is set up for the {own} design; clone it again to run {design}")
+    ws = os.path.abspath(root) if own == design else os.path.join(REPO, "workspaces", design)
     if RUNNERS.get(ws) and RUNNERS[ws].poll() is None:
         raise ValueError("already running")
     cmd = [sys.executable, os.path.join(HARNESS, "run.py"), "--design", design, "--workspace", ws]

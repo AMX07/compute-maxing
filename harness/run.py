@@ -64,14 +64,17 @@ def main():
 
     design = choose_design(args.design)
     ws = wsp.resolve(args.workspace or os.path.join("workspaces", design))
+    shown = os.path.relpath(ws, ROOT) if ws.startswith(ROOT + os.sep) else ws
     if not os.path.exists(os.path.join(ws, "workspace.json")):
+        adopt = os.path.exists(os.path.join(ws, "train.py"))
         wsp.create(ws, design)
-        log(f"created workspace {wsp.rel(ws)} from the baseline template")
+        log(f"adopted the existing project {shown} (its files are unchanged)" if adopt
+            else f"created workspace {shown} from the baseline template")
     elif wsp.design_of(ws) != design:
-        raise SystemExit(f"{wsp.rel(ws)} belongs to the {wsp.design_of(ws)!r} design; pick another --workspace.")
+        raise SystemExit(f"{shown} belongs to the {wsp.design_of(ws)!r} design; pick another --workspace.")
     env = {**os.environ, "HARNESS_WORKSPACE": ws, "HARNESS_DESIGN": design}
     log(f"design: {design} ({ABOUT[design]})")
-    log(f"workspace: {wsp.rel(ws)}" + ("  [FAKE TRAINING: no GPU]" if env.get("HARNESS_FAKE_TRAIN") == "1" else ""))
+    log(f"workspace: {shown}" + ("  [FAKE TRAINING: no GPU]" if env.get("HARNESS_FAKE_TRAIN") == "1" else ""))
 
     deadline = None
     if args.until:
