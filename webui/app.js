@@ -141,6 +141,7 @@ function renderAll() {
   renderList();
   renderDetail();
   renderCompare();
+  renderPlaybook();
 }
 
 function renderKpis() {
@@ -165,20 +166,28 @@ function renderLive() {
   }
   if (!state.data) return;
   const d = state.data, live = d.live, pend = state.items.filter((it) => it.pending);
+  const hs = d.harness && d.harness.status;
   let active = false, html;
   if (live && live.pct != null && !live.finished) {
     active = true;
-    const n = state.data.experiments.length + pend.length;
-    html = `<span class="live-text"><b>Training #${n}</b> · ${live.pct.toFixed(0)}%${
+    const n = hs && hs.phase === "training" ? hs.n : state.data.experiments.length + pend.length;
+    const title = hs && hs.phase === "training" && hs.title ? ": " + esc(hs.title) : "";
+    html = `<span class="live-text"><b>Training #${n}${title}</b> · ${live.pct.toFixed(0)}%${
       live.remaining_s != null ? " · " + fmtDur(live.remaining_s) + " left" : ""}${
       live.train_loss != null ? " · loss " + live.train_loss.toFixed(4) : ""}</span>
       <span class="bar"><i style="width:${Math.min(100, live.pct).toFixed(1)}%"></i></span>`;
+  } else if (hs && hs.phase === "planning") {
+    active = true;
+    html = `<span class="live-text"><b>Planning #${hs.n}</b> · the planner is choosing the next idea (${fmtDur(now() - hs.since)})</span>`;
   } else if (pend.length) {
     const p = pend[pend.length - 1];
     active = true;
     html = p.stage === "sampling"
       ? `<span class="live-text"><b>#${p.n} sampling</b> the benchmark images…</span>`
       : `<span class="live-text"><b>#${p.n} finished</b>${p.val_loss != null ? " at " + fmtLoss(p.val_loss) : ""} · waiting for the agent to log it</span>`;
+  } else if (hs && hs.phase === "reflecting") {
+    active = true;
+    html = `<span class="live-text"><b>Reflecting on #${hs.n}</b> · updating the playbook</span>`;
   } else if (live && !live.finished) {
     active = true;
     html = `<span class="live-text"><b>Running</b> · ${esc(live.line)}</span>`;
@@ -414,6 +423,7 @@ function renderDetail() {
         ${idea ? `<div class="idea"><span class="eyebrow">Planner's idea</span>
           ${idea.title ? `<h3>${esc(idea.title)}</h3>` : ""}
           ${idea.rationale ? `<p>${esc(idea.rationale)}</p>` : ""}
+          ${predictionHtml(idea)}
           ${sources.length ? `<ul>${sources.map((u) => `<li><a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u.replace(/^https?:\/\//, ""))}</a></li>`).join("")}</ul>` : ""}
         </div>` : ""}
         ${facts.length ? `<dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>` : ""}
@@ -427,6 +437,17 @@ function renderDetail() {
     </div>`;
   if (!sameRun) el.scrollTop = 0;
   loadDiff(it);
+}
+
+const signedPct = (v) => (v > 0 ? "+" : v < 0 ? "−" : "±") + Math.abs(v).toFixed(2) + "%";
+
+function predictionHtml(idea) {
+  const pred = idea.prediction || {}, out = idea.outcome || {};
+  if (typeof pred.delta_pct !== "number") return "";
+  const actual = typeof out.delta_pct === "number"
+    ? `<span>Actual <b class="${tone(out.delta_pct)}">${signedPct(out.delta_pct)}</b></span>` : "<span>Actual <b>—</b></span>";
+  return `<div class="pred"><span>Predicted <b>${signedPct(pred.delta_pct)}</b>${pred.confidence ? ` · ${esc(pred.confidence)} confidence` : ""}</span>${actual}</div>
+    ${out.prediction_check ? `<p class="pred-check">${esc(out.prediction_check)}</p>` : ""}`;
 }
 
 async function loadDiff(it) {
@@ -529,17 +550,32 @@ function select(key, byUser = true) {
   if (row) row.scrollIntoView({ block: "nearest" });
 }
 
+function renderPlaybook() {
+  const el = $("#view-playbook");
+  if (state.view !== "playbook" || !state.data) return;
+  const lessons = (state.data.harness && state.data.harness.lessons) || [];
+  el.innerHTML = `<section class="panel playbook">
+    <div class="panel-head"><h2>Playbook <span class="sub">lessons the loop has learned, rewritten by the reflector after every experiment</span></h2></div>
+    ${lessons.length ? `<ol class="lessons">${lessons.map((l) => `<li><span class="l-id">${esc(l.id)}</span><span class="l-text">${esc(l.text)}</span>
+      <span class="l-meta">added after #${esc(l.since)}${l.updated !== l.since ? ` · revised after #${esc(l.updated)}` : ""}</span></li>`).join("")}</ol>`
+      : `<div class="empty-state"><div><h3>No lessons yet</h3><p>The reflector adds lessons here after each experiment, and the planner reads them before choosing the next one.</p></div></div>`}
+  </section>`;
+}
+
+const VIEWS = ["progress", "compare", "playbook"];
+
 function setView(view) {
   state.view = view;
-  $("#view-progress").hidden = view !== "progress";
-  $("#view-compare").hidden = view !== "compare";
-  $("#tab-progress").setAttribute("aria-pressed", view === "progress");
-  $("#tab-compare").setAttribute("aria-pressed", view === "compare");
+  for (const v of VIEWS) {
+    $("#view-" + v).hidden = view !== v;
+    $("#tab-" + v).setAttribute("aria-pressed", view === v);
+  }
   try { history.replaceState(null, "", "#" + view); } catch (e) {}
   state.compareSig = "";
   if (state.data) {
     if (view === "progress") renderChart();
     renderCompare();
+    renderPlaybook();
   }
 }
 
@@ -601,7 +637,9 @@ function bind() {
     } else if (k === "l" && state.data) {
       state.follow = true; setView("progress"); select(newestKey(), false);
     } else if (k === "c") setView(state.view === "compare" ? "progress" : "compare");
-    else if (k === "p") setView("progress");
+    else if (k === "p" || k === "1") setView("progress");
+    else if (k === "2") setView("compare");
+    else if (k === "3" || k === "y") setView("playbook");
     else if (k === "t") toggleTheme();
   });
 
@@ -627,7 +665,7 @@ function glyph() {
 
 bind();
 glyph();
-setView(location.hash === "#compare" ? "compare" : "progress");
+setView(VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "progress");
 poll();
 setInterval(poll, POLL_MS);
 setInterval(() => { if (state.data && !state.error) renderLive(); }, 1000);

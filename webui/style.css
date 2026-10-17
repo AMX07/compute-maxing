@@ -286,6 +286,21 @@ select {
 .cmp-card .samples, .cmp-card .traj { width: min(100%, calc(100dvh - 30rem)); }
 .cmp-card .samples { min-width: 12rem; }
 
+/* ---------------------------------------------------------------- prediction + playbook */
+.pred { display: flex; flex-wrap: wrap; gap: 0.3rem 1.2rem; font-size: 0.85rem; color: var(--ink-2); margin-top: 0.15rem; }
+.pred b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+.pred b.good { color: var(--keep-ink); }
+.pred-check { font-style: italic; }
+.playbook-view { min-height: 0; display: grid; }
+.playbook { overflow-y: auto; padding-bottom: 1rem; }
+.lessons { list-style: none; margin: 0; padding: 0.6rem 1rem 0; display: grid; gap: 0.2rem; max-width: 70rem; }
+.lessons li { display: grid; grid-template-columns: 3.2rem minmax(0, 1fr) auto; gap: 1rem; align-items: baseline;
+  padding: 0.7rem 0.4rem; border-bottom: 1px solid var(--line); }
+.l-id { font: 600 0.85rem var(--font-mono); color: var(--accent); }
+.l-text { font-size: 1.1rem; line-height: 1.4; }
+.l-meta { font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
+@media (max-width: 640px) { .lessons li { grid-template-columns: 2.6rem minmax(0, 1fr); } .l-meta { grid-column: 2; } }
+
 /* ---------------------------------------------------------------- tooltip */
 .tip {
   position: fixed; z-index: 10; pointer-events: none; max-width: 22rem;

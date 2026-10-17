@@ -48,6 +48,16 @@ def log(msg):
     print(f"[harness {time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def set_status(phase, n, title=None, **extra):
+    """harness/traces/status.json tells the web UI what the loop is doing right now."""
+    try:
+        os.makedirs(os.path.join(ROOT, "harness", "traces"), exist_ok=True)
+        save_json(os.path.join(ROOT, "harness", "traces", "status.json"),
+                  {"phase": phase, "n": n, "title": title, "since": time.time(), **extra})
+    except OSError:
+        pass
+
+
 def git(*args, check=True):
     r = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
     if check and r.returncode:
@@ -394,6 +404,7 @@ def finish_artifacts(res, meta, outcome, parent_commit, exp_commit):
 
 def run_baseline(state, budget):
     log("no results yet: running the unmodified train.py as the baseline")
+    set_status("training", 0, "Baseline")
     res = run_training()
     head = git("rev-parse", "HEAD")
     if res["val_loss"] is None:
@@ -430,6 +441,7 @@ def main():
     lessons = load_json(PLAYBOOK, {"lessons": []})["lessons"]
 
     log(f"experiment #{n}: planning (best val_loss {state['best_val_loss']:.6f})")
+    set_status("planning", n)
     meta, new_src = propose(state, src, lessons, n)
     if meta is None:
         log("planner failed twice; skipping this iteration")
@@ -440,6 +452,7 @@ def main():
     parent = state["best_commit"]
     exp_commit = commit(f"exp {n}: {desc}", ["train.py"])
 
+    set_status("training", n, meta.get("title"), prediction=meta.get("prediction"))
     res = run_training()
     fix_note = None
     if res["val_loss"] is None:
@@ -452,6 +465,7 @@ def main():
         if fixed_src:
             write(TRAIN, fixed_src)
             exp_commit = commit(f"exp {n} fix: {fix_note or 'repair crash'}"[:200], ["train.py"])
+            set_status("training", n, meta.get("title"), note="retry after fix")
             res = run_training()
 
     best_before = state["best_val_loss"]
@@ -487,6 +501,7 @@ def main():
     finish_artifacts(res, meta, outcome, parent, exp_commit)
     append_result(exp_commit, res["val_loss"], res["memory_gb"], status, res["run_id"], desc)
 
+    set_status("reflecting", n, meta.get("title"))
     try:
         refl = reflect(meta, outcome, lessons, n)
         lessons = apply_playbook_ops(refl.get("ops"), n)
@@ -504,6 +519,7 @@ def main():
     save_json(STATE, state)
     commit(f"harness: exp {n} {status}" + (f" val_loss {res['val_loss']:.6f}" if res["val_loss"] else "")
            + "\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>", ["harness/memory"])
+    set_status("idle", n + 1)
     return 0
 
 

@@ -178,9 +178,15 @@ def build_state(root):
         counts[e["status"]] = counts.get(e["status"], 0) + 1
     prompt = next((e["metrics"].get("prompt") for e in list(reversed(experiments)) + pending
                    if e.get("metrics") and e["metrics"].get("prompt")), None)
+    status = read_json(os.path.join(root, "harness", "traces", "status.json"))
+    if not isinstance(status, dict) or time.time() - status.get("since", 0) > 20 * 60:
+        status = None  # stale: the loop isn't running
+    book = read_json(os.path.join(root, "harness", "memory", "playbook.json"))
+    lessons = book.get("lessons", []) if isinstance(book, dict) else []
     return {
         "root": os.path.abspath(root),
         "server_time": time.time(),
+        "harness": {"status": status, "lessons": lessons},
         "prompt": prompt,
         "experiments": experiments,
         "pending": pending,
