@@ -13,6 +13,7 @@ experiment is reverted with a new commit, so nothing is lost and other uncommitt
 """
 
 import ast
+import difflib
 import hashlib
 import json
 import os
@@ -42,6 +43,7 @@ SAMPLE_LIMIT = 120               # seconds allowed for the 16 benchmark images
 MIN_CAPTION_DROPOUT = 0.1
 MAX_LESSONS = 25
 STUCK_AFTER = 4                  # discards in a row before the planner is told to switch category
+REVIEWER_MODEL = "deepseek-ai/DeepSeek-V4-Pro"
 
 
 def log(msg):
@@ -59,7 +61,11 @@ def set_status(phase, n, title=None, **extra):
 
 
 def git(*args, check=True):
-    r = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
+    for _ in range(20):  # another process (the researcher, a human) may hold the index lock for a moment
+        r = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
+        if r.returncode == 0 or "index.lock" not in r.stderr:
+            break
+        time.sleep(0.5)
     if check and r.returncode:
         raise RuntimeError(f"git {' '.join(args)} failed: {r.stderr.strip()}")
     return r.stdout.strip()
@@ -334,10 +340,28 @@ def planner_messages(state, src, lessons, n):
             {"role": "user", "content": "\n\n".join(parts)}]
 
 
+def code_diff(old, new):
+    return "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), "a/train.py", "b/train.py", n=3))
+
+
+def review(meta, diff, n):
+    """A second model call checks that the diff implements the idea before a 2-minute run is spent on it."""
+    messages = [{"role": "system", "content": read(os.path.join(PROMPTS, "reviewer.md"))},
+                {"role": "user", "content": f"## The idea\n\n{json.dumps({k: meta.get(k) for k in ('title', 'description', 'rationale')}, indent=1)}"
+                                            f"\n\n## The diff\n\n```diff\n{diff}\n```"}]
+    try:
+        reply = llm.chat(messages, "reviewer", f"exp{n:03d}", temperature=0.1, max_tokens=4096, model=REVIEWER_MODEL)
+        return llm.extract_json(reply) or {"ok": True}
+    except Exception as e:  # a failed review never blocks an experiment
+        log(f"reviewer failed: {e}")
+        return {"ok": True}
+
+
 def propose(state, src, lessons, n):
-    """Planner call with one retry if the edit can't be applied or breaks a rule."""
+    """Planner call. A reply is retried (up to 2 times) if the edit can't be applied, breaks a rule, or the
+    reviewer finds a bug in it."""
     messages = planner_messages(state, src, lessons, n)
-    for attempt in range(2):
+    for attempt in range(3):
         reply = llm.chat(messages, "planner", f"exp{n:03d}", temperature=0.7)
         meta = llm.extract_json(reply) or {}
         try:
@@ -350,7 +374,14 @@ def propose(state, src, lessons, n):
         if not meta.get("description"):
             problems.append("the JSON block with title/description/prediction is missing")
         if not problems:
-            return meta, new_src
+            verdict = review(meta, code_diff(src, new_src), n)
+            if verdict.get("ok") is False and attempt < 2:
+                problems.append(f"a reviewer found a bug: {verdict.get('bug')} Hint: {verdict.get('fix_hint')}")
+                log(f"reviewer flagged: {verdict.get('bug')}")
+            else:
+                if verdict.get("ok") is False:
+                    meta["review_flag"] = verdict.get("bug")
+                return meta, new_src
         log(f"planner reply rejected: {problems}")
         messages += [{"role": "assistant", "content": reply},
                      {"role": "user", "content": "Your reply could not be used:\n- " + "\n- ".join(problems)
@@ -379,10 +410,11 @@ def fix(src, meta, res, n):
     return new_src, info
 
 
-def reflect(meta, outcome, lessons, n):
+def reflect(meta, outcome, lessons, n, diff=""):
     messages = [{"role": "system", "content": read(os.path.join(PROMPTS, "reflector.md"))},
                 {"role": "user", "content": f"## Playbook\n\n{render_playbook(lessons)}\n\n## Experiment #{n}\n\n"
-                                            f"Idea and prediction:\n{json.dumps(meta, indent=1)}\n\nOutcome:\n{json.dumps(outcome, indent=1)}"}]
+                                            f"Idea and prediction:\n{json.dumps(meta, indent=1)}\n\nThe code change that actually ran:\n"
+                                            f"```diff\n{diff[:6000]}\n```\n\nOutcome:\n{json.dumps(outcome, indent=1)}"}]
     reply = llm.chat(messages, "reflector", f"exp{n:03d}", temperature=0.3, max_tokens=4096)
     return llm.extract_json(reply) or {}
 
@@ -503,7 +535,7 @@ def main():
 
     set_status("reflecting", n, meta.get("title"))
     try:
-        refl = reflect(meta, outcome, lessons, n)
+        refl = reflect(meta, outcome, lessons, n, git("diff", parent, exp_commit, "--", "train.py", check=False))
         lessons = apply_playbook_ops(refl.get("ops"), n)
         outcome["prediction_check"] = refl.get("prediction_check")
         if res.get("run_dir"):

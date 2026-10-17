@@ -46,11 +46,11 @@ def config():
     return cfg
 
 
-def chat(messages, role, tag, temperature=0.7, max_tokens=8192, timeout=600):
+def chat(messages, role, tag, temperature=0.7, max_tokens=8192, timeout=600, model=None):
     """Send a chat completion and return the text reply. role/tag only name the trace file."""
     cfg = config()
     url = cfg["CRUSOE_BASE_URL"].rstrip("/") + "/chat/completions"
-    model = role_model(role) or cfg["CRUSOE_MODEL"]
+    model = model or role_model(role) or cfg["CRUSOE_MODEL"]
     body = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
     t0 = time.time()
     last_err = None

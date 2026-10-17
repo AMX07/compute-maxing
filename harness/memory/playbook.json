@@ -9,7 +9,7 @@
     },
     {
       "id": "L2",
-      "text": "Cosine LR schedule with warmup regresses val_loss by ~7% vs baseline in 2-min runs (exp 1)",
+      "text": "Exp 1's cosine schedule was implemented inverted (LR rose from 0 to peak), so its +7% says nothing about cosine decay itself; a correct cosine/linear decay is still untested (exp 1, human review)",
       "since": 1,
       "updated": 1
     }
