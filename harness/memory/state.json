@@ -1,7 +1,7 @@
 {
-  "best_commit": "e960c809809b298ef24884fa6c682b7cf46e289d",
-  "best_val_loss": 0.183772,
-  "consecutive_discards": 4,
+  "best_commit": "40fc0016647ed39675e285a9c7c9739272625979",
+  "best_val_loss": 0.18282,
+  "consecutive_discards": 0,
   "frozen": {
     "prepare.py": "1933e4d4bcb9add56d491efb6aa949d888527fc14f0bd99c1cb90369eb9ffb35",
     "inference.py": "b2e01380e6aa3b409a442ce9b9a3340fa5f4643734b4046b9776f84405a79c56"
@@ -63,6 +63,19 @@
       "run_id": null,
       "commit": "fa0867d",
       "prediction_check": "The EMA idea crashed due to lazy array accumulation and a parameter name mismatch, so the predicted -1.5% improvement was not tested."
+    },
+    {
+      "n": 5,
+      "title": "Remove text encoder, use learned embedding",
+      "category": "conditioning",
+      "status": "keep",
+      "idea_id": null,
+      "val_loss": 0.18282,
+      "prediction_pct": -2.0,
+      "actual_pct": -0.518,
+      "run_id": "20261017-141538",
+      "commit": "40fc001",
+      "prediction_check": "Outcome was directionally correct but weaker than predicted: -0.52% vs -2.0%, likely because throughput gain (3053 vs 2719 steps) was smaller than hoped."
     }
   ]
 }

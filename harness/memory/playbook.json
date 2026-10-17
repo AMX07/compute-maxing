@@ -1,5 +1,5 @@
 {
-  "next_id": 6,
+  "next_id": 7,
   "lessons": [
     {
       "id": "L1",
@@ -15,9 +15,9 @@
     },
     {
       "id": "L3",
-      "text": "Widening DiT from 256 to 384 hidden dim regresses val_loss by ~1.5% in 2-min runs; fewer steps (1525 vs 2719) outweigh capacity (exp 2)",
+      "text": "Widening DiT from 256 to 384 hidden dim regresses val_loss ~1.5%; fewer steps (1525 vs 2719) outweigh capacity (exp 2, 5)",
       "since": 2,
-      "updated": 2
+      "updated": 5
     },
     {
       "id": "L4",
@@ -30,6 +30,12 @@
       "text": "EMA implementation crashed: lazy arrays without mx.eval per step caused memory growth, and model.update(ema_state) failed due to parameter name mismatch (exp 4)",
       "since": 4,
       "updated": 4
+    },
+    {
+      "id": "L6",
+      "text": "Removing text encoder for learned embedding improves val_loss ~0.5% via +12% steps; conditioning quality loss is minor on CIFAR-10 (exp 5)",
+      "since": 5,
+      "updated": 5
     }
   ]
 }
