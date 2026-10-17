@@ -1,7 +1,7 @@
 {
   "best_commit": "e960c809809b298ef24884fa6c682b7cf46e289d",
   "best_val_loss": 0.183772,
-  "consecutive_discards": 1,
+  "consecutive_discards": 2,
   "frozen": {
     "prepare.py": "1933e4d4bcb9add56d491efb6aa949d888527fc14f0bd99c1cb90369eb9ffb35",
     "inference.py": "b2e01380e6aa3b409a442ce9b9a3340fa5f4643734b4046b9776f84405a79c56"
@@ -27,6 +27,18 @@
       "run_id": "20261017-140521",
       "commit": "4489898",
       "prediction_check": "Predicted a 2% improvement but got a 7% regression, likely because cosine decay reduced time at high LR and hurt final convergence in the short budget."
+    },
+    {
+      "n": 2,
+      "title": "Increase model width to 384",
+      "category": "model_shape",
+      "status": "discard",
+      "val_loss": 0.186467,
+      "prediction_pct": -2.5,
+      "actual_pct": 1.466,
+      "run_id": "20261017-140729",
+      "commit": "9137c91",
+      "prediction_check": "Prediction was wrong: widening to 384 hurt val_loss (+1.5%) despite more params, likely due to fewer steps (1525 vs 2719) and overfitting."
     }
   ]
 }

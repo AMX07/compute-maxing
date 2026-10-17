@@ -1,5 +1,5 @@
 {
-  "next_id": 3,
+  "next_id": 4,
   "lessons": [
     {
       "id": "L1",
@@ -12,6 +12,12 @@
       "text": "Exp 1's cosine schedule was implemented inverted (LR rose from 0 to peak), so its +7% says nothing about cosine decay itself; a correct cosine/linear decay is still untested (exp 1, human review)",
       "since": 1,
       "updated": 1
+    },
+    {
+      "id": "L3",
+      "text": "Widening DiT from 256 to 384 hidden dim regresses val_loss by ~1.5% in 2-min runs; fewer steps (1525 vs 2719) outweigh capacity (exp 2)",
+      "since": 2,
+      "updated": 2
     }
   ]
 }
