@@ -202,7 +202,7 @@ function buildModel(data) {
   }));
   return { arch, exps, comps, groups: groups.filter((g) => g.comps.length), byId, ideas, hyps, best, bestExp, hasMap: !!arch.components };
 }
-const metricName = (arch) => (arch.metric && arch.metric.name) || "val_loss";
+const metricName = (arch) => (arch && arch.metric && arch.metric.name) || (S.data && S.data.metric) || "val_loss";
 
 function verdictOf(e) {
   if (e.n === 0) return null;
@@ -433,8 +433,11 @@ function renderChart() {
   const vals = exps.filter((e) => e.val_loss != null).map((e) => e.val_loss);
   const base = s.baseline_val_loss ?? Math.max(...vals);
   const lo = Math.min(...vals);
-  const cap = base + Math.max((base - lo) * 0.8, base * 0.002);  // worse runs above this sit on the top edge
-  const yLo = lo - (cap - lo) * 0.08, yHi = cap;
+  // The top is the baseline or the 95th percentile, whichever is higher; rarer, worse runs sit on the top edge.
+  const sorted = [...vals].sort((a, b) => a - b);
+  const top = Math.max(base, sorted[Math.floor(0.95 * (sorted.length - 1))]);
+  const cap = top + Math.max((top - lo) * 0.06, top * 0.0005);
+  const yLo = lo - (cap - lo) * 0.06, yHi = cap;
   const x = (i) => L + ((W - L - R) * i) / Math.max(1, exps.length - 1);
   const y = (val) => T + ((H - T - B) * (yHi - Math.min(val, yHi))) / (yHi - yLo);
   const out = [];
@@ -525,9 +528,9 @@ function overview() {
     <div class="sec"><h4>Hypotheses <span class="muted">${hyps.filter((h) => h.status === "validated").length} validated · ${hyps.filter((h) => h.status === "invalidated").length} invalidated</span></h4>
       <ul class="hyps">${hyps.map((h) => `<li class="${esc(h.status)}"><span class="hs" title="${esc(h.status)}">${VERDICT[h.status] || "?"}</span>
         <span>${esc(h.text)}</span><span class="ev">${refChips(h.evidence || [])}</span></li>`).join("") || `<li class="muted">None yet.</li>`}</ul></div>
-    <div class="sec"><h4>Next up <span class="muted">${m.ideas.length} queued</span></h4>
+    ${m.ideas.length ? `<div class="sec"><h4>Next up <span class="muted">${m.ideas.length} queued</span></h4>
       <ul class="ideas">${m.ideas.slice(0, 8).map((i) => `<li><button type="button" data-sel="i:${esc(i.id)}">${esc(i.title)}</button>
-        <span class="muted">${esc(i.comp ? i.comp.name : humanize(i.category))}</span></li>`).join("") || `<li class="muted">The idea bank is empty.</li>`}</ul></div>
+        <span class="muted">${esc(i.comp ? i.comp.name : humanize(i.category))}</span></li>`).join("")}</ul></div>` : ""}
     ${lessons.length ? `<details class="sec" ${lessons.length <= 4 ? "open" : ""}><summary><h4>Theories <span class="muted">${lessons.length} from the playbook</span></h4></summary>
       <ul class="lessons">${lessons.map((l) => `<li>${lessonHtml(l.text)}</li>`).join("")}</ul></details>` : ""}`;
 }
@@ -549,12 +552,15 @@ function expDetail(e) {
   const idea = e.idea || {}, out = idea.outcome || {}, pred = idea.prediction || {};
   const actual = out.delta_pct ?? e.pct;
   const diffUrl = e.files["change.diff"];
+  // Upstream autoresearch resets discarded experiments in git, so only kept ones have code to show.
+  const codeLost = !diffUrl && S.m.exps.some((x) => x.files["change.diff"]);
+  const sameAsLabel = e.description.replace(/\s*\(.*?\)\s*$/, "").toLowerCase() === String(e.label).toLowerCase();
   const lessons = ((S.data.harness && S.data.harness.lessons) || []).filter((l) => new RegExp(`\\bexps? [\\d,\\s]*\\b${e.n}\\b`).test(l.text));
   return `
     <div class="d-head"><span class="tag">#${e.n}</span><span class="pill ${esc(e.status)}">${esc(STATUS[e.status] || e.status)}</span>
       ${e.comp ? `<button type="button" class="chip" data-sel="c:${esc(e.comp.id)}">${esc(e.comp.name)}</button>` : ""}</div>
     <h3>${esc(e.label)}</h3>
-    <p class="muted">${esc(e.description)}</p>
+    ${sameAsLabel ? "" : `<p class="muted">${esc(e.description)}</p>`}
     ${metricsRow(e)}
     <div class="sec"><h4>Change</h4>
       <div class="ba"><span class="before">${esc(e.before || "baseline")}</span><span class="arrow">→</span><span class="after">${esc(e.change.after || e.label)}</span></div>
@@ -566,7 +572,8 @@ function expDetail(e) {
     ${out.prediction_check || lessons.length ? `<div class="sec"><h4>Why</h4>
       ${out.prediction_check ? `<p>${esc(out.prediction_check)}</p>` : ""}
       ${lessons.map((l) => `<p class="lesson">${lessonHtml(l.text)}</p>`).join("")}</div>` : ""}
-    ${diffUrl ? `<details class="sec code" data-url="${esc(diffUrl)}"><summary><h4>Code <span class="mono"><span class="good">+${e.diff ? e.diff.add : "?"}</span> <span class="worse">−${e.diff ? e.diff.del : "?"}</span> lines</span></h4></summary><div class="diff"></div></details>` : ""}
+    ${diffUrl ? `<details class="sec code" data-url="${esc(diffUrl)}"><summary><h4>Code <span class="mono"><span class="good">+${e.diff ? e.diff.add : "?"}</span> <span class="worse">−${e.diff ? e.diff.del : "?"}</span> lines</span></h4></summary><div class="diff"></div></details>`
+      : codeLost ? `<p class="muted small">No code for this run: discarded experiments are reset in git, so only kept changes keep their diff.</p>` : ""}
     ${samplesFig(e)}`;
 }
 
@@ -578,6 +585,7 @@ function metricsRow(e) {
     ${e.n ? `<div><span>vs best before</span><b class="mono ${tone(e.pct)}">${e.status === "crash" ? "—" : fmtPct(e.pct)}</b></div>` : ""}
     ${cur.num_steps != null ? `<div><span>steps</span><b class="mono">${cur.num_steps}${prev ? delta(cur.num_steps, prev.num_steps, (x) => x) : ""}</b></div>` : ""}
     ${cur.num_params_M != null ? `<div><span>params</span><b class="mono">${cur.num_params_M}M${prev ? delta(cur.num_params_M, prev.num_params_M, (x) => x.toFixed(2) + "M") : ""}</b></div>` : ""}
+    ${cur.num_params_M == null && e.memory_gb ? `<div><span>memory</span><b class="mono">${e.memory_gb} GB${e.bestExpBefore && e.bestExpBefore.memory_gb ? delta(e.memory_gb, e.bestExpBefore.memory_gb, (x) => x.toFixed(1)) : ""}</b></div>` : ""}
   </div>`;
 }
 

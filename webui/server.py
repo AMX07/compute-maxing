@@ -79,21 +79,27 @@ def to_float(s):
 
 
 def read_results(root):
-    """Parse results.tsv into a list of dicts, in experiment order. Tolerates a missing header or short rows."""
+    """Parse results.tsv into a list of dicts, in experiment order. Columns come from the header, so both this
+    harness's layout and upstream autoresearch's (commit, val_bpb, memory_gb, status, description) work: the second
+    column is the metric, whatever its name, and is returned as "val_loss". Tolerates a missing header or short rows."""
     try:
         with open(os.path.join(root, "results.tsv")) as f:
             raw = f.read().splitlines()
     except OSError:
         return []
-    rows = []
+    rows, cols = [], HEADER
     for line in raw:
         if not line.strip():
             continue
-        parts = line.split("\t", len(HEADER) - 1)
-        if parts[0].strip().lower() == "commit":
+        if line.split("\t")[0].strip().lower() == "commit":
+            cols = [c.strip().lower() for c in line.split("\t")]
+            cols = ["commit", "val_loss"] + cols[2:]
             continue
-        parts += [""] * (len(HEADER) - len(parts))
-        row = dict(zip(HEADER, (p.strip() for p in parts)))
+        parts = line.split("\t", len(cols) - 1)
+        parts += [""] * (len(cols) - len(parts))
+        row = dict(zip(cols, (p.strip() for p in parts)))
+        for k in HEADER:
+            row.setdefault(k, "")
         row["status"] = row["status"].lower() or "unknown"
         row["val_loss"] = to_float(row["val_loss"])
         if row["status"] == "crash" or row["val_loss"] == 0:
@@ -116,6 +122,49 @@ def run_started(run_id, run_dir, metrics):
         return os.path.getmtime(run_dir)
     except OSError:
         return None
+
+
+def results_metric(root):
+    """The metric's name: architecture.json, else the second column of results.tsv's header, else val_loss."""
+    name = ((read_json(os.path.join(root, "architecture.json")) or {}).get("metric") or {}).get("name")
+    if isinstance(name, str) and name:
+        return name
+    try:
+        with open(os.path.join(root, "results.tsv")) as f:
+            head = f.readline().rstrip("\n").split("\t")
+        if head[0].strip().lower() == "commit" and len(head) > 1:
+            return head[1].strip()
+    except OSError:
+        pass
+    return "val_loss"
+
+
+HASH_RE = re.compile(r"^[0-9a-f]{7,40}$")
+GIT_DIFFS = {}  # (root, commit) -> {"add", "del"} or None; commits never change, so this never goes stale
+
+
+def git_diff(root, commit, stats_only=True):
+    """train.py's change in a commit of the project's own repo (upstream autoresearch keeps no run folders, but its
+    kept experiments are commits). Returns line counts, or the diff text with stats_only=False; None if unknown."""
+    if not commit or not HASH_RE.match(commit):
+        return None
+    key = (root, commit)
+    if stats_only and key in GIT_DIFFS:
+        return GIT_DIFFS[key]
+    args = ["git", "-C", root, "show", "--format=", "--numstat" if stats_only else "--patch", commit, "--", "train.py"]
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode:
+        out = None
+    elif not stats_only:
+        return r.stdout
+    else:
+        nums = r.stdout.split()
+        out = {"add": int(nums[0]), "del": int(nums[1])} if len(nums) >= 2 and nums[0].isdigit() else None
+    GIT_DIFFS[key] = out
+    return out
 
 
 def diff_stats(path):
@@ -201,6 +250,11 @@ def build_state(root, prefix=""):
         }
         exp.update({k: info[k] for k in ("metrics", "files", "idea", "diff", "started_at")} if info else
                    {"metrics": None, "files": {}, "idea": None, "diff": None, "started_at": None})
+        if "change.diff" not in exp["files"] and i > 0:
+            stats = git_diff(root, row["commit"])
+            if stats:
+                exp["files"] = {**exp["files"], "change.diff": f"{prefix}/diff/{row['commit']}"}
+                exp["diff"] = stats
         if row["status"] == "keep" and v is not None and (best is None or v < best):
             best, best_idx = v, i
         exp["best_after"] = best
@@ -245,6 +299,7 @@ def build_state(root, prefix=""):
     return {
         "root": os.path.abspath(root),
         "name": project_name(root),
+        "metric": results_metric(root),
         "server_time": time.time(),
         "harness": {"status": status, "lessons": lessons, "notes": notes, "design": design},
         "architecture": arch if isinstance(arch, dict) else None,
@@ -393,7 +448,10 @@ def agents_state(root):
         roles = []
         for role, about in d["roles"]:
             prompt = os.path.join(PROMPTS, role + ".md")
-            roles.append({"role": role, "about": about, "model": models.get(role) or "default (CRUSOE_MODEL)",
+            tiers = (read_json(os.path.join(HARNESS, "config.json")) or {}).get("subagent_models") or {}
+            model = models.get(role) or (" or ".join(m.split("/")[-1] for m in tiers.values()) if role == "subagent" and tiers
+                                         else "default (CRUSOE_MODEL)")
+            roles.append({"role": role, "about": about, "model": model,
                           "prompt": role if os.path.exists(prompt) else None})
         designs.append({"id": key, "name": d["name"], "about": d["about"], "roles": roles,
                         "workspace": ws, "exists": os.path.isdir(ws),
@@ -474,6 +532,12 @@ class Handler(BaseHTTPRequestHandler):
                         return self.json({"role": parts[2], "text": f.read()})
                 except OSError:
                     return self.not_found()
+            if len(parts) == 4 and parts[0] == "p" and parts[2] == "diff" and HASH_RE.match(parts[3]):
+                entry = projects().get(parts[1])
+                text = git_diff(entry["path"], parts[3], stats_only=False) if entry else None
+                if text is None:
+                    return self.not_found()
+                return self.send(200, text.encode(), "text/plain; charset=utf-8", "max-age=3600")
             if len(parts) == 5 and parts[0] == "p" and parts[2] == "runs" and RUN_ID_RE.match(parts[3]) \
                     and parts[4] in RUN_FILES:
                 entry = projects().get(parts[1])
