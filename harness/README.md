@@ -40,3 +40,26 @@ These checks are enforced in code, not by asking the model:
 | `memory/state.json` | Best commit and val_loss, and every idea with its prediction and outcome | yes |
 | `memory/playbook.json`, `playbook.md` | Lessons learned | yes |
 | `traces/` | Every LLM call (prompt, reply, timing, usage), the live status file, and loop logs | no |
+
+## Researcher (`harness/researcher.py`)
+
+A separate background process that keeps an idea bank, `memory/ideas.jsonl`, stocked for the planner. You.com only retrieves (Search, optionally Contents; never the Research endpoint, which runs You.com's own model). Every LLM call goes to Crusoe through `harness.llm` under the `researcher` role.
+
+```bash
+python3 -m harness.researcher --once     # one round
+python3 -m harness.researcher --loop     # a round whenever fewer than 6 ideas are untried, checked every 60 s
+```
+
+`--max-searches N` caps You.com searches per process (default 40), and `--loop` exits when `harness/STOP` exists. With `YDC_API_KEY` in the environment or `.env`, it uses the REST Search API (`include_domains` arxiv.org, openreview.net, github.com, huggingface.co; highlights, ~3k tokens). Without a key, it uses the keyless MCP endpoint (`you-search`, about 100 queries a day). If search fails, Crusoe proposes ideas from its own knowledge, and those cards are marked `"origin": "model-only"` with no sources. Network errors are logged to `traces/researcher.log` and retried on the next round.
+
+One round reads `results.tsv`, `memory/state.json`, `memory/playbook.md` and the best `train.py`'s hyperparameters, asks Crusoe for 2-3 queries aimed at the current bottleneck, searches, and asks Crusoe to distill the results into at most 5 cards. Web content is passed as delimited, untrusted data. Cards are dropped if their sources weren't in the results or if they repeat an earlier idea. Prompts are in `prompts/researcher.md`.
+
+`memory/ideas.jsonl` is append-only, one JSON object per line:
+
+```json
+{"id": "I7", "status": "new", "title": "Logit-normal timestep sampling", "category": "other",
+ "change": "one concrete change to train.py", "mechanism": "why val_loss should drop in 2 minutes",
+ "sources": ["https://arxiv.org/..."], "mlx_risk": "low", "query": "q1 | q2", "created_at": "2026-10-17T14:08:25-07:00"}
+```
+
+A later line with the same `id` updates that idea, e.g. `{"id": "I7", "status": "tried", "exp": 9, "outcome": "discard"}`. Readers fold lines by id: `researcher.load_bank()` returns the merged ideas, `researcher.untried()` the ones still `new`, and `researcher.mark(id, **fields)` appends an update.

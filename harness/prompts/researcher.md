@@ -26,6 +26,7 @@ Rules for cards:
 - Each card is ONE concrete, small change to `train.py` that the planner can implement in a single edit (hyperparameters, loss weighting, timestep sampling, optimizer, schedule, architecture tweak, init, normalization, conditioning).
 - The change must be possible inside `train.py` alone. The data pipeline, the evaluation, the time budget and the sampler are frozen. Do not propose lowering CAPTION_DROPOUT below 0.1, sampler-only changes, distillation from a teacher, or anything needing pretrained weights or extra data.
 - The mechanism must explain why val_loss should drop within 2 minutes on this tiny model, not just why the idea helps at scale.
+- val_loss weights 8 evenly spaced timesteps equally. Loss reweighting or non-uniform timestep sampling moves training away from that metric, so such cards must say why the metric still improves (e.g. faster convergence on the hard middle timesteps).
 - Do not repeat ideas that were already tried (listed in the loop state) or that are already in the idea bank, unless the change is materially different.
 - "sources" must be URLs copied exactly from the search results that support the card. If a card relies only on general knowledge, leave it out. Exception: when the user message says search is unavailable, use your own knowledge of the literature and set "sources" to [].
 - "mlx_risk": how likely the change is to be awkward or slow in MLX on Apple Silicon (custom kernels, unsupported ops, fp8, flash-attention specifics are high).
