@@ -338,7 +338,10 @@ select {
   .cmp-card .samples, .cmp-card .traj { width: 100%; }
 }
 @media (max-width: 640px) {
-  .top { grid-template-columns: minmax(0, 1fr) auto; gap: 0.75rem; }
+  .top { grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
+  .tabs { grid-row: 2; justify-self: start; }
+  .kpis { grid-row: 3; }
+  .live { grid-row: 4; }
   .brand { min-width: 0; }
   .glyph { display: none; }
   .tabs button { padding: 0.35rem 0.6rem; }
