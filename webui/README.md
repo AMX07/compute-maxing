@@ -1,44 +1,40 @@
 # webui
 
-The presentation view for the autoresearch diffusion runs. It shows the progress chart, the experiment log, the samples for each run, and a side-by-side comparison of two runs. It uses the Python standard library and vanilla JS, with no CDN, so it works offline.
+The interface for observing and steering autoresearch projects: pick a project, see its architecture evolve experiment by experiment, and control the agents that run it. It works for any project laid out like autoresearch, and uses the Python standard library and vanilla JS, with no CDN, so it works offline.
 
 ## Run it
-
-Real data, from the project root (reads `results.tsv` and `runs/`):
 
 ```bash
 python3 webui/server.py
 ```
 
-Then open http://localhost:8080. The page polls every 5 seconds, so new results appear while the agent runs.
+Then open http://localhost:8080. The server adds every `workspaces/*` project to the recent list (`~/.autoresearch/projects.json`). Add another project with `--root path/to/project` (repeatable) or with **Open folder** on the home page. A project is a folder with `train.py`, `results.tsv` and `runs/`. Mock data: `python3 webui/make_mock.py`, then `python3 webui/server.py --root webui/mock`.
 
-Mock data, for working on the UI before real runs exist:
+## Pages
 
-```bash
-python3 webui/make_mock.py
-```
+- **Home** (`#/`): recent projects as icons. Each icon is that project's best-so-far curve.
+- **Architecture** (`#/p/<id>/baseline|evolution|current`): the model as components, in three views (keys `1` `2` `3`). **Baseline** is what the loop started from. **Evolution** puts every experiment to the right of the component it changed, in order: green = kept, grey = discarded, red dashed = crashed, purple dashed = queued ideas. **Current** is the architecture after every kept change. The loss chart underneath is linked both ways: hovering a block highlights its point, and clicking a point selects its block. The right panel shows the hypotheses (validated or not, with the experiments that decided them), the queued ideas and the playbook's theories. Select a block to see its change (before → after, cost, params and steps), the hypothesis with predicted vs actual, why it worked or didn't, the code diff, and the samples. Keys: `←`/`→` step through experiments, `Esc` clears the selection, `T` switches light/dark.
+- **Agents** (`#/p/<id>/agents`): pick the design (custom pipeline or model-driven), start or stop the loop, edit any role's prompt (`harness/prompts/*.md`), and follow every LLM call as it happens: what the agent read, its reasoning and its reply. Only projects under this repo's `workspaces/` can be started from here.
 
-```bash
-python3 webui/server.py --root webui/mock
-```
+## architecture.json
 
-Flags: `--root` (default: the parent of `webui/`), `--port` (default `8080`), and `--host` (default `127.0.0.1`; use `0.0.0.0` to open it from another device). `make_mock.py --upto N` writes only the first N experiments. Run it again with a higher N to watch results arrive live. `--no-pending` skips the unlogged run.
+Optional, in the project folder. It maps the model's components and tags each experiment with the component it changed. Without it, the Evolution view groups experiments by the planner's idea category. See `workspaces/fixed/architecture.json`:
 
-## What's on screen
+- `components[]`: `{id, group, name, baseline: {label, detail, cost, params}}`, in diagram order. `groups[]` names the groups; `flow: true` draws them as a forward pass.
+- `changes{n}`: `{component, label, after, cost, note}` for experiment n. `after` becomes the component's label once the change is kept.
+- `hypotheses[]`: `{text, status: validated|invalidated|inconclusive|untested, evidence: [n, ...]}`. Without it, each experiment's prediction is checked against its result.
+- `next{idea_id: component}` places queued ideas from `memory/ideas.jsonl`; `tried[]` hides ideas that already ran.
 
-- **Header:** baseline → best val_loss, experiment counts, and a live status. The status shows "Training #N · 34% · 1m 20s left", read from `run.log`, while a run trains. It shows "#N finished, waiting for the agent to log it" once the run folder exists but `results.tsv` has no row for it yet.
-- **Progress** (`P`): val_loss per experiment in the style of Karpathy's progress.png. Kept runs are green dots, discarded runs grey dots, crashes a red ×, and the running best a green step line. Runs far above the baseline sit as triangles on the top edge. Below the chart is the experiment log, newest first, with the change against the baseline and against the best result before that run. Clicking a run, in the chart or the log, shows its 16 benchmark samples, the seed-0 denoising strip, the planner's `idea.json` if there is one, and its `change.diff`.
-- **Compare** (`C`): two runs' samples and trajectories side by side. It defaults to baseline vs current best and keeps following the best until you pick other runs.
+## Annotate (design review)
 
-Keys: `↑`/`↓` step through runs, `B` jumps to the best run, `L` follows the latest run again, `T` switches light/dark. Use Cmd +/− to scale everything for the projector.
+Add `?annotate` to any page, e.g. http://localhost:8080/?annotate#/. Hover a component to see its name and size, use `↑`/`↓` to widen to the parent or narrow back, and click to pin a numbered note. `A` turns picking off so you can use the app normally (to select a block, or switch views), and on again. Notes are saved to `webui/annotations.json` with each component's selector, text, and position, so Claude can read them. **Copy** puts them on the clipboard as Markdown.
 
 ## API
 
-`GET /api/runs` returns `results.tsv` joined with each `runs/<run_id>/metrics.json`:
+- `GET /api/projects`: recent projects. `POST /api/projects {"path"}` adds one.
+- `GET /api/p/<id>`: `experiments[]` (results.tsv joined with each run's metrics.json, idea.json and diff size), `architecture`, `ideas`, `harness.lessons`, `harness.status`, `live` (progress parsed from `run.log`), and `summary`.
+- `GET /api/p/<id>/agents`: designs, roles and models, status, the loop log and recent LLM calls. `GET /api/p/<id>/trace/<file>` returns one call in full.
+- `POST /api/p/<id>/run {"design", "until"}` starts `harness/run.py`. `POST /api/p/<id>/stop` writes `harness/STOP` (add `"now": true` to end the process).
+- `GET`/`POST /api/prompts/<role>` reads or writes `harness/prompts/<role>.md`.
 
-- `experiments[]`: one per row, in order, with `status`, `val_loss` (null for crashes), `delta_baseline`, `delta_best` (against the best kept result before this row), `best_after` (the running best), `metrics`, `idea`, and `files` (URLs for samples.png, trajectory.png, change.diff, train.py, ...).
-- `pending[]`: run folders newer than every logged run that have no row yet.
-- `live`: the progress parsed from `run.log` if it was written in the last 90 s.
-- `summary`: baseline, best, best_idx, and counts.
-
-Run files are served at `/runs/<run_id>/<file>`, for the whitelisted names only.
+Run files are served at `/p/<id>/runs/<run_id>/<file>`, for the whitelisted names only.

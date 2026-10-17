@@ -1,29 +1,61 @@
 """
-Presentation server for the autoresearch diffusion runs. Standard library only.
+Server for the autoresearch UI. Standard library only.
 
-    python3 webui/server.py                       # project root (parent of webui/), http://localhost:8080
-    python3 webui/server.py --root webui/mock     # mock data from make_mock.py
+A project is a directory an autoresearch loop works in: train.py, results.tsv, runs/<run_id>/, and optionally
+memory/ (playbook.json, ideas.jsonl), traces/status.json, and architecture.json (the component map the
+architecture views draw; without it, experiments are grouped by their idea category).
+
+    python3 webui/server.py                                # registers workspaces/*, http://localhost:8080
+    python3 webui/server.py --root path/to/project         # also registers that project
     python3 webui/server.py --port 9000 --host 0.0.0.0
 
 Routes:
-    /                      the UI (webui/index.html, app.js, style.css)
-    /api/runs              results.tsv joined with runs/*/metrics.json and the optional files
-    /runs/<run_id>/<file>  samples.png, trajectory.png, train.py, change.diff, idea.json, metrics.json
+    /                             the UI (webui/index.html, app.js, style.css)
+    /api/projects                 GET recent projects; POST {"path": ...} adds one
+    /api/p/<id>                   one project's state: experiments, architecture, lessons, ideas, live status
+    /p/<id>/runs/<run_id>/<file>  samples.png, trajectory.png, train.py, change.diff, idea.json, metrics.json
+    /api/annotations              GET or POST the design-review notes from /?annotate (webui/annotations.json)
 """
 
 import argparse
+import hashlib
 import json
 import math
 import mimetypes
 import os
 import re
+import subprocess
+import sys
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
+STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css",
+          "/annotate.js": "annotate.js"}
+ANNOTATIONS = os.path.join(HERE, "annotations.json")  # design-review notes from ?annotate mode
+REGISTRY = os.path.expanduser("~/.autoresearch/projects.json")  # recent projects: [{path, added_at, opened_at}]
+
+# The agent harness that runs projects under <repo>/workspaces/. Projects elsewhere are view-only.
+REPO = os.path.dirname(HERE)
+HARNESS = os.path.join(REPO, "harness")
+PROMPTS = os.path.join(HARNESS, "prompts")
+STOP_FILE = os.path.join(HARNESS, "STOP")
+DESIGNS = {
+    "fixed": {"name": "Custom pipeline", "about": "Roles fixed in code: planner → guards → train → fixer on crash → "
+              "reflector → playbook, with a background researcher filling the idea bank.",
+              "roles": [("planner", "Proposes one experiment and writes the edit to train.py"),
+                        ("fixer", "Repairs an edit that crashed"),
+                        ("reflector", "Checks the prediction against the result and updates the playbook"),
+                        ("researcher", "Runs in the background: searches the web and fills the idea bank")]},
+    "agentic": {"name": "Model-driven", "about": "One orchestrator picks an action each turn: spawn sub-agents "
+                "(choosing their role, task, context and model), search, read files, update its notes, or run.",
+                "roles": [("orchestrator", "Decides the next action, up to 8 turns and 4 sub-agents per experiment"),
+                          ("subagent", "A role the orchestrator invents for one task; runs in parallel")]},
+}
+TRACE_RE = re.compile(r"^exp(\d+)(?:-([a-z]\d+))?-([a-z_]+)-(\d+)\.json$")
+RUNNERS = {}  # workspace path -> Popen of harness/run.py started from the UI
 RUN_FILES = {"samples.png", "trajectory.png", "train.py", "change.diff", "idea.json", "metrics.json"}
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 HEADER = ["commit", "val_loss", "memory_gb", "status", "run_id", "description"]
@@ -86,7 +118,19 @@ def run_started(run_id, run_dir, metrics):
         return None
 
 
-def run_info(root, run_id):
+def diff_stats(path):
+    """Lines added and removed in a unified diff, or None if there is no diff."""
+    try:
+        with open(path, errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    add = sum(1 for l in lines if l.startswith("+") and not l.startswith("+++"))
+    rem = sum(1 for l in lines if l.startswith("-") and not l.startswith("---"))
+    return {"add": add, "del": rem}
+
+
+def run_info(root, run_id, prefix=""):
     """Everything the UI needs from runs/<run_id>/. Image URLs carry the file mtime so the browser refetches on change."""
     run_dir = os.path.join(root, "runs", run_id)
     if not os.path.isdir(run_dir):
@@ -96,13 +140,14 @@ def run_info(root, run_id):
     for name in RUN_FILES:
         path = os.path.join(run_dir, name)
         try:
-            files[name] = f"/runs/{run_id}/{name}?v={int(os.path.getmtime(path))}"
+            files[name] = f"{prefix}/runs/{run_id}/{name}?v={int(os.path.getmtime(path))}"
         except OSError:
             pass
     idea = read_json(os.path.join(run_dir, "idea.json")) if "idea.json" in files else None
     if idea is not None and not isinstance(idea, dict):
         idea = None
     return {"run_id": run_id, "metrics": metrics, "files": files, "idea": idea,
+            "diff": diff_stats(os.path.join(run_dir, "change.diff")),
             "started_at": run_started(run_id, run_dir, metrics)}
 
 
@@ -132,7 +177,7 @@ def live_log(root):
     return out
 
 
-def build_state(root):
+def build_state(root, prefix=""):
     rows = read_results(root)
     try:
         run_ids = sorted(d for d in os.listdir(os.path.join(root, "runs"))
@@ -145,7 +190,7 @@ def build_state(root):
     best_idx = None
     experiments = []
     for i, row in enumerate(rows):
-        info = run_info(root, row["run_id"]) if row["run_id"] and RUN_ID_RE.match(row["run_id"]) else None
+        info = run_info(root, row["run_id"], prefix) if row["run_id"] and RUN_ID_RE.match(row["run_id"]) else None
         v = row["val_loss"]
         exp = {
             "idx": i, "commit": row["commit"] or None, "status": row["status"], "val_loss": v,
@@ -154,8 +199,8 @@ def build_state(root):
             "delta_baseline": (v - baseline) if v is not None and baseline is not None and i > 0 else None,
             "delta_best": (v - best) if v is not None and best is not None else None,
         }
-        exp.update({k: info[k] for k in ("metrics", "files", "idea", "started_at")} if info else
-                   {"metrics": None, "files": {}, "idea": None, "started_at": None})
+        exp.update({k: info[k] for k in ("metrics", "files", "idea", "diff", "started_at")} if info else
+                   {"metrics": None, "files": {}, "idea": None, "diff": None, "started_at": None})
         if row["status"] == "keep" and v is not None and (best is None or v < best):
             best, best_idx = v, i
         exp["best_after"] = best
@@ -168,7 +213,7 @@ def build_state(root):
     for rid in run_ids:
         if rid in logged or rid <= newest_logged:
             continue
-        info = run_info(root, rid)
+        info = run_info(root, rid, prefix)
         if info:
             info["stage"] = "logging" if "samples.png" in info["files"] else "sampling"
             pending.append(info)
@@ -196,10 +241,14 @@ def build_state(root):
     except OSError:
         notes = ""
     design = (read_json(os.path.join(root, "workspace.json")) or {}).get("design")
+    arch = read_json(os.path.join(root, "architecture.json"))
     return {
         "root": os.path.abspath(root),
+        "name": project_name(root),
         "server_time": time.time(),
         "harness": {"status": status, "lessons": lessons, "notes": notes, "design": design},
+        "architecture": arch if isinstance(arch, dict) else None,
+        "ideas": read_jsonl(first(("memory", "ideas.jsonl"), ("harness", "memory", "ideas.jsonl"))),
         "prompt": prompt,
         "experiments": experiments,
         "pending": pending,
@@ -207,6 +256,170 @@ def build_state(root):
         "summary": {"baseline_val_loss": baseline, "best_val_loss": best, "best_idx": best_idx,
                     "counts": counts, "total": len(experiments)},
     }
+
+
+def read_jsonl(path):
+    out = []
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(d, dict):
+                    out.append(d)
+    except OSError:
+        pass
+    return out
+
+
+def project_name(root):
+    """architecture.json "name", else workspace.json "name", else the directory name."""
+    for fname in ("architecture.json", "workspace.json"):
+        name = (read_json(os.path.join(root, fname)) or {}).get("name") if fname else None
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return os.path.basename(os.path.normpath(root))
+
+
+def project_id(path):
+    return hashlib.sha1(path.encode()).hexdigest()[:10]
+
+
+def load_registry():
+    data = read_json(REGISTRY)
+    return [p for p in data if isinstance(p, dict) and isinstance(p.get("path"), str)] if isinstance(data, list) else []
+
+
+def register(path, opened=False):
+    """Add a project directory to the recent list (and mark it opened). Returns its entry."""
+    path = os.path.abspath(os.path.expanduser(path))
+    items = load_registry()
+    entry = next((p for p in items if p["path"] == path), None)
+    if entry is None:
+        entry = {"path": path, "added_at": time.time()}
+        items.append(entry)
+    if opened:
+        entry["opened_at"] = time.time()
+    os.makedirs(os.path.dirname(REGISTRY), exist_ok=True)
+    tmp = REGISTRY + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(items, f, indent=2)
+    os.replace(tmp, REGISTRY)
+    return entry
+
+
+def is_project(path):
+    return os.path.isdir(path) and any(os.path.exists(os.path.join(path, f)) for f in ("results.tsv", "train.py", "runs"))
+
+
+def projects():
+    """id -> registry entry, for the registered directories that still exist."""
+    return {project_id(p["path"]): p for p in load_registry() if os.path.isdir(p["path"])}
+
+
+def project_card(pid, entry):
+    """The landing page's view of a project: name, path, best-so-far curve, and when it last changed."""
+    root = entry["path"]
+    rows = read_results(root)
+    best, curve = None, []
+    for r in rows:
+        if r["status"] == "keep" and r["val_loss"] is not None and (best is None or r["val_loss"] < best):
+            best = r["val_loss"]
+        curve.append(best)
+    mtimes = []
+    for f in ("results.tsv", "run.log", "train.py"):
+        try:
+            mtimes.append(os.path.getmtime(os.path.join(root, f)))
+        except OSError:
+            pass
+    status = read_json(os.path.join(root, "traces", "status.json"))
+    live = isinstance(status, dict) and status.get("phase") not in (None, "stopped") and \
+        time.time() - status.get("since", 0) < 20 * 60
+    return {"id": pid, "name": project_name(root), "path": root, "total": len(rows),
+            "baseline": rows[0]["val_loss"] if rows else None, "best": best, "curve": curve,
+            "updated_at": max(mtimes) if mtimes else None, "opened_at": entry.get("opened_at"),
+            "has_map": os.path.exists(os.path.join(root, "architecture.json")), "live": bool(live)}
+
+
+def managed(root):
+    """True if the repo's harness can run this project (it lives under <repo>/workspaces/)."""
+    return os.path.isdir(HARNESS) and os.path.dirname(os.path.abspath(root)) == os.path.join(REPO, "workspaces")
+
+
+def tail(path, n=60):
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(0, os.path.getsize(path) - 16384))
+            return f.read().decode("utf-8", "replace").splitlines()[-n:]
+    except OSError:
+        return []
+
+
+def trace_summary(path):
+    m = TRACE_RE.match(os.path.basename(path))
+    d = read_json(path)
+    if not m or not isinstance(d, dict):
+        return None
+    reply = d.get("reply") or ""
+    title = None
+    found = re.search(r'"(?:title|action)"\s*:\s*"([^"]{1,120})"', reply)
+    if found:
+        title = found.group(1)
+    usage = d.get("usage") or {}
+    return {"file": os.path.basename(path), "exp": int(m.group(1)), "step": m.group(2), "role": m.group(3),
+            "ts": int(m.group(4)), "model": d.get("model"), "seconds": d.get("seconds"),
+            "tokens": usage.get("total_tokens") if isinstance(usage, dict) else None, "error": d.get("error"),
+            "title": title, "preview": re.sub(r"\s+", " ", reply)[:220], "has_reasoning": bool(d.get("reasoning"))}
+
+
+def agents_state(root):
+    """Design, roles and models, the live status, the loop log, and the most recent LLM calls."""
+    design = (read_json(os.path.join(root, "workspace.json")) or {}).get("design")
+    models = (read_json(os.path.join(HARNESS, "config.json")) or {}).get("models", {})
+    traces_dir = os.path.join(root, "traces")
+    try:
+        files = sorted((f for f in os.listdir(traces_dir) if TRACE_RE.match(f)),
+                       key=lambda f: int(TRACE_RE.match(f).group(4)), reverse=True)[:120]
+    except OSError:
+        files = []
+    calls = [c for c in (trace_summary(os.path.join(traces_dir, f)) for f in files) if c]
+    status = read_json(os.path.join(traces_dir, "status.json"))
+    proc = RUNNERS.get(os.path.abspath(root))
+    designs = []
+    for key, d in DESIGNS.items():
+        ws = os.path.join(REPO, "workspaces", key)
+        roles = []
+        for role, about in d["roles"]:
+            prompt = os.path.join(PROMPTS, role + ".md")
+            roles.append({"role": role, "about": about, "model": models.get(role) or "default (CRUSOE_MODEL)",
+                          "prompt": role if os.path.exists(prompt) else None})
+        designs.append({"id": key, "name": d["name"], "about": d["about"], "roles": roles,
+                        "workspace": ws, "exists": os.path.isdir(ws),
+                        "project": project_id(ws) if os.path.isdir(ws) else None})
+    return {"managed": managed(root), "design": design, "designs": designs, "status": status,
+            "server_time": time.time(), "running": bool(proc and proc.poll() is None),
+            "stop_requested": os.path.exists(STOP_FILE), "calls": calls,
+            "log": tail(os.path.join(traces_dir, "loop.log"))}
+
+
+def start_loop(root, design, until=None, max_iters=0):
+    """Start harness/run.py for a design. A design runs in its own workspace, so another design starts a new one."""
+    ws = os.path.abspath(root) if (read_json(os.path.join(root, "workspace.json")) or {}).get("design") == design \
+        else os.path.join(REPO, "workspaces", design)
+    if RUNNERS.get(ws) and RUNNERS[ws].poll() is None:
+        raise ValueError("already running")
+    cmd = [sys.executable, os.path.join(HARNESS, "run.py"), "--design", design, "--workspace", ws]
+    if until:
+        if not re.match(r"^\d{1,2}:\d{2}$", until):
+            raise ValueError("until must be HH:MM")
+        cmd += ["--until", until]
+    if max_iters:
+        cmd += ["--max-iters", str(int(max_iters))]
+    log = open(os.path.join(HARNESS, f"runner-{design}.log"), "a")
+    RUNNERS[ws] = subprocess.Popen(cmd, cwd=REPO, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    return ws
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -236,18 +449,108 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path in STATIC:
                 return self.serve_file(os.path.join(HERE, STATIC[path]), "no-store")
-            if path == "/api/runs":
-                body = json.dumps(build_state(self.root), allow_nan=False).encode()
-                return self.send(200, body, "application/json; charset=utf-8", "no-store")
             parts = path.strip("/").split("/")
-            if len(parts) == 3 and parts[0] == "runs" and RUN_ID_RE.match(parts[1]) and parts[2] in RUN_FILES:
+            if path == "/api/projects":
+                cards = [project_card(pid, e) for pid, e in projects().items()]
+                cards.sort(key=lambda c: -(c["opened_at"] or c["updated_at"] or 0))
+                return self.json(cards)
+            if len(parts) == 3 and parts[:2] == ["api", "p"]:
+                entry = projects().get(parts[2])
+                if not entry:
+                    return self.not_found()
+                if "open=1" in (urlparse(self.path).query or ""):
+                    register(entry["path"], opened=True)
+                return self.json(build_state(entry["path"], f"/p/{parts[2]}"))
+            if len(parts) == 4 and parts[:2] == ["api", "p"] and parts[3] == "agents":
+                entry = projects().get(parts[2])
+                return self.json(agents_state(entry["path"])) if entry else self.not_found()
+            if len(parts) == 5 and parts[:2] == ["api", "p"] and parts[3] == "trace" and TRACE_RE.match(parts[4]):
+                entry = projects().get(parts[2])
+                d = read_json(os.path.join(entry["path"], "traces", parts[4])) if entry else None
+                return self.json(d) if isinstance(d, dict) else self.not_found()
+            if len(parts) == 3 and parts[:2] == ["api", "prompts"] and re.match(r"^[a-z_]+$", parts[2]):
+                try:
+                    with open(os.path.join(PROMPTS, parts[2] + ".md")) as f:
+                        return self.json({"role": parts[2], "text": f.read()})
+                except OSError:
+                    return self.not_found()
+            if len(parts) == 5 and parts[0] == "p" and parts[2] == "runs" and RUN_ID_RE.match(parts[3]) \
+                    and parts[4] in RUN_FILES:
+                entry = projects().get(parts[1])
+                if not entry:
+                    return self.not_found()
                 # URLs carry ?v=<mtime>, so a changed file gets a new URL and these can be cached.
-                return self.serve_file(os.path.join(self.root, "runs", parts[1], parts[2]), "max-age=3600")
+                return self.serve_file(os.path.join(entry["path"], "runs", parts[3], parts[4]), "max-age=3600")
+            if path == "/api/annotations":
+                if not os.path.exists(ANNOTATIONS):
+                    return self.send(200, b"[]", "application/json; charset=utf-8", "no-store")
+                return self.serve_file(ANNOTATIONS, "no-store")
             if path == "/favicon.ico":
                 return self.send(204, b"", "image/x-icon")
             self.not_found()
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def json(self, obj, code=200):
+        self.send(code, json.dumps(obj, allow_nan=False).encode(), "application/json; charset=utf-8", "no-store")
+
+    def do_POST(self):
+        """POST /api/projects {"path"} adds a project. POST /api/annotations replaces the notes (a JSON array)."""
+        path = urlparse(self.path).path
+        parts = path.strip("/").split("/")
+        action = parts[3] if len(parts) == 4 and parts[:2] == ["api", "p"] else None
+        prompt = parts[2] if len(parts) == 3 and parts[:2] == ["api", "prompts"] else None
+        if path not in ("/api/annotations", "/api/projects") and action not in ("run", "stop") and \
+                not (prompt and os.path.exists(os.path.join(PROMPTS, prompt + ".md"))):
+            return self.not_found()
+        length = int(self.headers.get("Content-Length") or 0)
+        if not 0 < length <= 1 << 20:
+            return self.send(413, b"bad length\n", "text/plain; charset=utf-8")
+        try:
+            notes = json.loads(self.rfile.read(length))
+        except ValueError:
+            notes = None
+        if prompt:
+            text = (notes or {}).get("text") if isinstance(notes, dict) else None
+            if not isinstance(text, str) or not text.strip():
+                return self.json({"error": "empty prompt"}, 400)
+            with open(os.path.join(PROMPTS, prompt + ".md"), "w") as f:
+                f.write(text)
+            return self.json({"ok": True})
+        if action:
+            entry = projects().get(parts[2])
+            if not entry or not managed(entry["path"]):
+                return self.json({"error": "this project isn't run by this repo's harness"}, 400)
+            body = notes if isinstance(notes, dict) else {}
+            if action == "stop":
+                with open(STOP_FILE, "w") as f:
+                    f.write("stop requested from the UI\n")
+                proc = RUNNERS.get(entry["path"])
+                if body.get("now") and proc and proc.poll() is None:
+                    proc.terminate()
+                return self.json({"ok": True})
+            if body.get("design") not in DESIGNS:
+                return self.json({"error": "design must be fixed or agentic"}, 400)
+            try:
+                ws = start_loop(entry["path"], body["design"], body.get("until"), body.get("max_iters") or 0)
+            except ValueError as e:
+                return self.json({"error": str(e)}, 400)
+            register(ws, opened=True)
+            return self.json({"id": project_id(ws)})
+        if path == "/api/projects":
+            target = os.path.abspath(os.path.expanduser(str((notes or {}).get("path") or "")))
+            if not isinstance(notes, dict) or not is_project(target):
+                return self.json({"error": "not a project directory (needs train.py, results.tsv or runs/)"}, 400)
+            register(target, opened=True)
+            return self.json({"id": project_id(target)})
+        if not isinstance(notes, list):
+            return self.send(400, b"expected a JSON array\n", "text/plain; charset=utf-8")
+        tmp = ANNOTATIONS + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(notes, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, ANNOTATIONS)
+        self.send(200, b'{"ok": true}', "application/json; charset=utf-8", "no-store")
 
     def serve_file(self, path, cache):
         try:
@@ -264,19 +567,25 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser(description="Serve the autoresearch presentation UI.")
-    ap.add_argument("--root", default=os.path.join(os.path.dirname(HERE), "workspaces", "fixed"),
-                    help="a workspace with results.tsv and runs/ (default: workspaces/fixed)")
+    ap.add_argument("--root", action="append", default=[],
+                    help="a project directory to add to the recent list (repeatable); workspaces/* are added too")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to reach it from another device")
     args = ap.parse_args()
 
-    Handler.root = os.path.abspath(args.root)
-    if not os.path.isdir(Handler.root):
-        raise SystemExit(f"--root {Handler.root} is not a directory")
+    found = []
+    ws = os.path.join(os.path.dirname(HERE), "workspaces")
+    if os.path.isdir(ws):
+        found = [os.path.join(ws, d) for d in sorted(os.listdir(ws)) if is_project(os.path.join(ws, d))]
+    for root in found + args.root:
+        if not is_project(os.path.abspath(root)):
+            raise SystemExit(f"--root {root} is not a project directory (needs train.py, results.tsv or runs/)")
+        register(root)
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     httpd.daemon_threads = True
     shown = "localhost" if args.host in ("127.0.0.1", "0.0.0.0") else args.host
-    print(f"Serving {Handler.root}\n  http://{shown}:{args.port}  (Ctrl-C to stop)", flush=True)
+    print(f"Projects: {', '.join(p['path'] for p in load_registry()) or 'none yet'}\n"
+          f"  http://{shown}:{args.port}  (Ctrl-C to stop)", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
