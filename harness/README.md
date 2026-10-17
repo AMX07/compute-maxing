@@ -52,6 +52,22 @@ Each experiment runs in a fresh process, and all state lives in files. A crash c
 5. **Log:** the row is appended to `results.tsv`, and `idea.json` (idea, prediction, outcome) and `change.diff` are written into `runs/<run_id>/` for the web UI.
 6. **Reflect:** the reflector (`prompts/reflector.md`) reads the diff that ran, checks it against the planner's `self_check`, and compares the prediction with the outcome. If the code didn't implement the idea, it records a lesson about the bug rather than the idea. It makes at most 3 itemized changes to the playbook (`memory/playbook.json`, also rendered as `playbook.md`), and code merges them.
 
+## Models and thinking (`harness/config.json`)
+
+`models` maps each role to a Crusoe model:
+- **V4-Pro:** planner, fixer, orchestrator.
+- **V4-Flash:** reflector, researcher.
+- **Sub-agents:** "pro" or "flash", as the orchestrator chooses.
+
+DeepSeek V4 only reasons when asked (`chat_template_kwargs: {"thinking": true}`). `thinking` lists the roles that get it, with a 16k-token budget. Measured on our prompts:
+
+| Role | Without thinking | With thinking |
+|---|---|---|
+| Planner | 3–8 s | 129 s, a valid plan with a more concrete self-check |
+| Fixer, replaying the exp 4 EMA crash | 2.6 s, correct diagnosis | 162 s, same diagnosis and a cleaner fix (the EMA update moves into the compiled step) |
+
+Only the fixer has thinking on: it runs on roughly 1 in 13 experiments, and a bad repair wastes a 2-minute run. The planner and orchestrator stay fast, so more experiments fit in the time.
+
 ## The evaluator stays outside the loop
 
 These checks are enforced in code, not by asking the model:
