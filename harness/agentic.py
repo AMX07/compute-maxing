@@ -20,6 +20,14 @@ from harness import step
 from harness import workspace as wsp
 from harness.step import load_json, log, read, save_json, set_status, write
 
+
+def read_opt(path):
+    """Contents of an optional file, or "" if it doesn't exist yet."""
+    try:
+        return read(path)
+    except OSError:
+        return ""
+
 MAX_TURNS = 8                    # orchestrator actions per experiment (the last one must run an experiment)
 MAX_AGENTS = 4                   # sub-agents per experiment
 MODELS = {"pro": "deepseek-ai/DeepSeek-V4-Pro", "flash": "deepseek-ai/Deepseek-V4-Flash"}
@@ -64,7 +72,7 @@ def context_item(item, state, src):
     if item == "results":
         return f"## Experiment log\n\n{step.experiment_log(state)}"
     if item == "notes":
-        return f"## Orchestrator notes\n\n{read(NOTES) or '(empty)'}"
+        return f"## Orchestrator notes\n\n{read_opt(NOTES) or '(empty)'}"
     if item.startswith("file:"):
         return f"## {item[5:]}\n\n```\n{read_file(item[5:])}\n```"
     return f"## {item}\n\n(unknown context item; use train.py, results, notes or file:<path>)"
@@ -108,7 +116,7 @@ def search_literature(query):
 def opening(state, n, src):
     last = state.get("last_outcome")
     parts = [f"## program.md\n\n{read(os.path.join(wsp.WS, 'program.md'))}",
-             f"## Your notes (memory/notes.md)\n\n{read(NOTES) or '(empty: this is your first experiment or you have not written notes yet)'}",
+             f"## Your notes (memory/notes.md)\n\n{read_opt(NOTES) or '(empty: this is your first experiment or you have not written notes yet)'}",
              f"## Experiment log\n\n{step.experiment_log(state)}\n\nCurrent best val_loss: {state['best_val_loss']}"]
     if last:
         parts.append(f"## Last experiment's outcome\n\n```json\n{json.dumps(last, indent=1)[:3000]}\n```")

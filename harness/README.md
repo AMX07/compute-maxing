@@ -6,15 +6,42 @@ Our own agent harness for the autoresearch loop. It replaces "point Claude Code 
 
 1. Put your Crusoe settings in `.env` at the project root. The file is git-ignored; see `.env.example`.
 2. Check the connection with `python3 -m harness.llm`, which should reply "ready".
-3. Start the loop:
+3. Pick a design and start the loop. Leave out `--design` and it asks you.
 
 ```bash
-python3 harness/run.py --until 16:15
+python3 harness/run.py --design fixed --until 16:15
 ```
 
-`--until` stops starting new experiments after that local time. `touch harness/STOP` finishes the current experiment and then stops. `--max-iters 1` runs a single experiment. The first iteration runs the unmodified `train.py` as the baseline.
+```bash
+python3 harness/run.py --design agentic --until 16:15
+```
 
-## One iteration (`harness/step.py`)
+`--until` stops starting new experiments after that local time. `touch harness/STOP` finishes the current experiment and then stops. `--max-iters N` runs N experiments. A new workspace's first iteration runs the unmodified baseline `train.py`. There is one GPU, so run one design at a time.
+
+## Two designs, two workspaces
+
+| | `fixed` | `agentic` |
+|---|---|---|
+| Who decides the workflow | Code: planner, guards, run, fixer on a crash, reflector | The model: an orchestrator picks one action per turn, up to 8 turns and 4 sub-agents per experiment |
+| Agents | Fixed roles with fixed prompts | Sub-agents the orchestrator spawns itself, choosing each one's role, task, context and model (V4-Pro or Flash). They run in parallel. |
+| Literature | A background researcher fills `memory/ideas.jsonl` | The orchestrator searches when it decides to (`search_literature`) |
+| Memory | Playbook lessons written by the reflector | `memory/notes.md`, which the orchestrator rewrites itself (`write_notes`) |
+| Task brief | `program.md` | `program.md` plus `designs/agentic_program.md`: one GPU so runs are serial, only thinking parallelizes, and the failure modes past models hit here |
+| Shared code | Edit guards, training, keep/discard by val_loss, logging, git, push (`step.execute` / `step.record`) | Same |
+
+Each design runs in its own workspace, `workspaces/<design>/`. A workspace holds its own `train.py`, frozen copies of `prepare.py` and `inference.py`, `program.md`, `results.tsv`, `runs/`, `run.log`, `memory/` and `traces/`. The harness only reads and writes inside the workspace that `run.py` passes it. The agentic `read_file` action is confined there too, so no task file, memory or LLM context crosses between designs. New workspaces start from the root `train.py`, which is the baseline. `workspaces/fixed/` holds the first 13 experiments, which ran before workspaces existed.
+
+Point the web UI at a workspace: `python3 webui/server.py --root workspaces/agentic --port 8081`. It defaults to `workspaces/fixed`.
+
+### Testing without the GPU
+
+`HARNESS_FAKE_TRAIN=1` swaps training for a fake run: a run folder and `run.log` with a val_loss derived from the code. Everything else runs for real: the Crusoe calls, guards, git, logging and memory. The isolation test runs both designs in a throwaway clone and checks four things:
+- each design's LLM prompts never contain the other workspace's `train.py`;
+- each run writes only inside its own workspace;
+- every commit touches only that workspace;
+- `read_file` can't escape the workspace (`../`, `.env`, absolute paths).
+
+## One iteration of the fixed design (`harness/step.py`)
 
 Each experiment runs in a fresh process, and all state lives in files. A crash costs one iteration, and edits to the prompts or code take effect on the next one.
 
@@ -42,17 +69,18 @@ From experiment 3 to 13, a separate reviewer model checked every diff before it 
 
 | Path | What it holds | In git |
 |---|---|---|
-| `memory/state.json` | Best commit and val_loss, and every idea with its prediction and outcome | yes |
-| `memory/playbook.json`, `playbook.md` | Lessons learned | yes |
-| `traces/` | Every LLM call (prompt, reply, timing, usage), the live status file, and loop logs | no |
+| `workspaces/<d>/memory/state.json` | Best commit and val_loss, and every idea with its prediction and outcome | yes |
+| `workspaces/fixed/memory/playbook.json`, `playbook.md` | Lessons learned (fixed design) | yes |
+| `workspaces/agentic/memory/notes.md`, `agents/` | The orchestrator's notes, and every sub-agent's role, task and reply (agentic design) | yes |
+| `workspaces/<d>/traces/` | Every LLM call (prompt, reply, timing, usage), the live status file, and loop logs | no |
 
 ## Researcher (`harness/researcher.py`)
 
-A separate background process that keeps an idea bank, `memory/ideas.jsonl`, stocked for the planner. You.com only retrieves (Search, optionally Contents; never the Research endpoint, which runs You.com's own model). Every LLM call goes to Crusoe through `harness.llm` under the `researcher` role.
+Part of the fixed design: `run.py --design fixed` starts it as a background process (unless `--no-researcher`), and it keeps the workspace's idea bank, `memory/ideas.jsonl`, stocked for the planner. You.com only retrieves (Search, optionally Contents; never the Research endpoint, which runs You.com's own model). Every LLM call goes to Crusoe through `harness.llm` under the `researcher` role.
 
 ```bash
-python3 -m harness.researcher --once     # one round
-python3 -m harness.researcher --loop     # a round whenever fewer than 6 ideas are untried, checked every 60 s
+HARNESS_WORKSPACE=workspaces/fixed python3 -m harness.researcher --once     # one round
+HARNESS_WORKSPACE=workspaces/fixed python3 -m harness.researcher --loop     # a round whenever fewer than 6 ideas are untried
 ```
 
 `--max-searches N` caps You.com searches per process (default 40), and `--loop` exits when `harness/STOP` exists. With `YDC_API_KEY` in the environment or `.env`, it uses the REST Search API (`include_domains` arxiv.org, openreview.net, github.com, huggingface.co; highlights, ~3k tokens). Without a key, it uses the keyless MCP endpoint (`you-search`, about 100 queries a day). If search fails, Crusoe proposes ideas from its own knowledge, and those cards are marked `"origin": "model-only"` with no sources. Network errors are logged to `traces/researcher.log` and retried on the next round.
