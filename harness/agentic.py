@@ -142,6 +142,9 @@ def orchestrate(state, n, src):
             edits = [(e["search"], e.get("replace", "")) for e in act.get("edits") or []
                      if isinstance(e, dict) and isinstance(e.get("search"), str)] or llm.extract_edits(reply)
             try:
+                if not edits:
+                    raise ValueError('"edits" is empty and there are no SEARCH/REPLACE blocks: give at least one '
+                                     '{"search": "<exact lines from train.py>", "replace": "<new lines>"}')
                 new_src = step.apply_edits(src, edits)
                 problems = step.validate(new_src)
                 if new_src == src:

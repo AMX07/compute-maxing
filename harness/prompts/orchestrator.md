@@ -19,8 +19,14 @@ Actions:
 
 5. Run one experiment. This ends your turns for this experiment:
    {"action": "run_experiment", "title": "<= 6 words", "category": "lr_schedule|optimizer|batch_throughput|model_shape|architecture|precision|init_norm|conditioning|regularization|other", "description": "one line, <= 80 chars", "rationale": "the mechanism, 2-3 sentences", "prediction": {"delta_pct": -1.0, "confidence": "low|medium|high"}, "self_check": ["values your edited code produces at key points, traced by hand"], "edits": [{"search": "exact lines from the CURRENT train.py", "replace": "new lines"}]}
-   Each `search` must match exactly one place in train.py. The edit is checked by code before it runs. A rejected edit costs a turn, and you get the reason.
+   `edits` must not be empty. Each `search` must match exactly one place in train.py. If multi-line code is awkward to escape inside JSON, leave `edits` out and put SEARCH/REPLACE blocks after the JSON object instead:
+   <<<<<<< SEARCH
+   exact lines from train.py
+   =======
+   replacement lines
+   >>>>>>> REPLACE
+   The edit is checked by code before it runs. A rejected edit costs a turn, and you get the reason.
 
 Rules that the harness also enforces: only train.py changes; nothing imported from `prepare` is redefined or reassigned; the test split is never read; `CAPTION_DROPOUT >= 0.1`; the time accounting stays honest. Sampler-only changes (SAMPLE_STEPS, CFG_SCALE, `sample`) cannot change val_loss.
 
-Reply with the JSON object only.
+Reply with the JSON object only, plus SEARCH/REPLACE blocks after it if you use that format for run_experiment.
