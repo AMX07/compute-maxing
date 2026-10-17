@@ -81,37 +81,16 @@ class MLP(nn.Module):
         return self.proj(nn.gelu_approx(self.fc(x)))
 
 
-class TextBlock(nn.Module):
-    def __init__(self, dim, n_head):
-        super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
-        self.attn = Attention(dim, n_head)
-        self.norm2 = nn.LayerNorm(dim)
-        self.mlp = MLP(dim)
-
-    def __call__(self, x, mask):
-        x = x + self.attn(self.norm1(x), mask)
-        x = x + self.mlp(self.norm2(x))
-        return x
-
-
 class TextEncoder(nn.Module):
-    """Byte-level transformer over the prompt, masked mean-pooled to one vector."""
+    """Direct learned embedding of token IDs, mean-pooled to one vector."""
     def __init__(self, config):
         super().__init__()
         dim = config.n_embd
         self.wte = nn.Embedding(config.vocab_size, dim)
-        self.wpe = 0.02 * mx.random.normal((config.text_len, dim))
-        self.blocks = [TextBlock(dim, config.n_head) for _ in range(config.text_layers)]
-        self.norm = nn.LayerNorm(dim)
 
     def __call__(self, tokens):
         keep = tokens != PAD  # BOS is never PAD, so every prompt keeps at least one token
-        x = self.wte(tokens) + self.wpe
-        mask = mx.where(keep[:, None, None, :], 0.0, -1e9).astype(x.dtype)
-        for block in self.blocks:
-            x = block(x, mask)
-        x = self.norm(x)
+        x = self.wte(tokens)
         w = keep[..., None].astype(x.dtype)
         return (x * w).sum(axis=1) / w.sum(axis=1)
 
