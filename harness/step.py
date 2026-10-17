@@ -447,6 +447,8 @@ def fix(src, meta, res, n):
 
 
 def reflect(meta, outcome, lessons, n, diff=""):
+    # The reviewer's flag is an unverified opinion (it has been wrong); the reflector judges from the diff itself.
+    meta = {k: v for k, v in meta.items() if k != "review_flag"}
     messages = [{"role": "system", "content": read(os.path.join(PROMPTS, "reflector.md"))},
                 {"role": "user", "content": f"## Playbook\n\n{render_playbook(lessons)}\n\n## Experiment #{n}\n\n"
                                             f"Idea and prediction:\n{json.dumps(meta, indent=1)}\n\nThe code change that actually ran:\n"
