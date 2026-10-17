@@ -192,7 +192,7 @@ TEXT_LAYERS = 2         # text encoder depth
 # Optimization
 BATCH_SIZE = 128        # images per optimizer step
 LEARNING_RATE = 1e-3    # AdamW peak learning rate
-WEIGHT_DECAY = 0.01     # AdamW weight decay
+WEIGHT_DECAY = 0.0      # AdamW weight decay
 ADAM_BETAS = (0.9, 0.95) # Adam beta1, beta2
 WARMUP_RATIO = 0.05     # fraction of time budget for LR warmup
 WARMDOWN_RATIO = 0.3    # fraction of time budget for LR warmdown
