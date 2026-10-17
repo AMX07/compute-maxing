@@ -1,7 +1,7 @@
 {
   "best_commit": "e960c809809b298ef24884fa6c682b7cf46e289d",
   "best_val_loss": 0.183772,
-  "consecutive_discards": 3,
+  "consecutive_discards": 4,
   "frozen": {
     "prepare.py": "1933e4d4bcb9add56d491efb6aa949d888527fc14f0bd99c1cb90369eb9ffb35",
     "inference.py": "b2e01380e6aa3b409a442ce9b9a3340fa5f4643734b4046b9776f84405a79c56"
@@ -51,6 +51,18 @@
       "run_id": "20261017-140948",
       "commit": "779e294",
       "prediction_check": "Predicted -2% improvement but got +0.09% regression; the math import issue likely made the run fall back to a constant LR, so the cosine schedule was never actually exercised."
+    },
+    {
+      "n": 4,
+      "title": "Add EMA of model weights",
+      "category": "regularization",
+      "status": "crash",
+      "val_loss": null,
+      "prediction_pct": -1.5,
+      "actual_pct": null,
+      "run_id": null,
+      "commit": "fa0867d",
+      "prediction_check": "The EMA idea crashed due to lazy array accumulation and a parameter name mismatch, so the predicted -1.5% improvement was not tested."
     }
   ]
 }
