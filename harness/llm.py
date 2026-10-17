@@ -53,6 +53,9 @@ def chat(messages, role, tag, temperature=0.7, max_tokens=8192, timeout=600, mod
     url = cfg["CRUSOE_BASE_URL"].rstrip("/") + "/chat/completions"
     model = model or role_model(role) or cfg["CRUSOE_MODEL"]
     body = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+    if role_thinking(role):  # DeepSeek V4: reasoning is off unless requested; it needs room in max_tokens
+        body["chat_template_kwargs"] = {"thinking": True}
+        body["max_tokens"] = max(max_tokens, 16000)
     t0 = time.time()
     last_err = None
     for attempt in range(5):
@@ -63,7 +66,8 @@ def chat(messages, role, tag, temperature=0.7, max_tokens=8192, timeout=600, mod
                 data = json.load(resp)
             msg = data["choices"][0]["message"]
             text = msg.get("content") or ""
-            trace(tag, role, messages, text, data.get("usage"), time.time() - t0, msg.get("reasoning_content"), model=model)
+            trace(tag, role, messages, text, data.get("usage"), time.time() - t0,
+                  msg.get("reasoning_content") or msg.get("reasoning"), model=model)
             return text
         except urllib.error.HTTPError as e:
             detail = e.read()[:800].decode("utf-8", "replace")
@@ -77,13 +81,22 @@ def chat(messages, role, tag, temperature=0.7, max_tokens=8192, timeout=600, mod
     raise RuntimeError(f"Crusoe call failed ({role}): {last_err}")
 
 
-def role_model(role):
-    """Per-role model from harness/config.json; CRUSOE_MODEL is the fallback."""
+def _config_file():
     try:
         with open(os.path.join(ROOT, "harness", "config.json")) as f:
-            return json.load(f).get("models", {}).get(role)
+            return json.load(f)
     except (OSError, ValueError):
-        return None
+        return {}
+
+
+def role_model(role):
+    """Per-role model from harness/config.json; CRUSOE_MODEL is the fallback."""
+    return _config_file().get("models", {}).get(role)
+
+
+def role_thinking(role):
+    """Whether this role asks the model to reason first (harness/config.json "thinking")."""
+    return bool(_config_file().get("thinking", {}).get(role))
 
 
 def trace(tag, role, messages, reply, usage, seconds, reasoning, error=None, model=None):

@@ -1,6 +1,6 @@
 # agent_design: idea search with You.com
 
-Stock autoresearch has no way to search for ideas. The agent's ideas come from its own weights, the technique names in `train.py` (ResFormer, Polar Express, NorMuon, ...), and `results.tsv`. Its only fallback is one line in `program.md`: "read papers referenced in the code". The agent has no tool to do that, and its knowledge stops at its training cutoff. You.com gives it a search box and a page reader.
+The agent's ideas come from its own weights, the technique names in `train.py` (ResFormer, Polar Express, NorMuon, ...), and `results.tsv`. Its only fallback is one line in `program.md`: "read papers referenced in the code". The agent has no tool to do that, and its knowledge stops at its training cutoff. You.com gives it a search box and a page reader.
 
 ## Setup
 

@@ -3,6 +3,11 @@
     "planner": "deepseek-ai/DeepSeek-V4-Pro",
     "fixer": "deepseek-ai/DeepSeek-V4-Pro",
     "reflector": "deepseek-ai/Deepseek-V4-Flash",
-    "researcher": "deepseek-ai/Deepseek-V4-Flash"
-  }
+    "researcher": "deepseek-ai/Deepseek-V4-Flash",
+    "orchestrator": "deepseek-ai/DeepSeek-V4-Pro"
+  },
+  "thinking": {
+    "fixer": true
+  },
+  "thinking_note": "Roles listed here get DeepSeek thinking (chat_template_kwargs.thinking) with a 16k-token budget. It made one planner call take 129 s instead of 3-8 s, so only the rarely-called fixer uses it."
 }
