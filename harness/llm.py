@@ -50,7 +50,8 @@ def chat(messages, role, tag, temperature=0.7, max_tokens=8192, timeout=600):
     """Send a chat completion and return the text reply. role/tag only name the trace file."""
     cfg = config()
     url = cfg["CRUSOE_BASE_URL"].rstrip("/") + "/chat/completions"
-    body = {"model": cfg["CRUSOE_MODEL"], "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+    model = role_model(role) or cfg["CRUSOE_MODEL"]
+    body = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
     t0 = time.time()
     last_err = None
     for attempt in range(5):
@@ -61,7 +62,7 @@ def chat(messages, role, tag, temperature=0.7, max_tokens=8192, timeout=600):
                 data = json.load(resp)
             msg = data["choices"][0]["message"]
             text = msg.get("content") or ""
-            trace(tag, role, messages, text, data.get("usage"), time.time() - t0, msg.get("reasoning_content"))
+            trace(tag, role, messages, text, data.get("usage"), time.time() - t0, msg.get("reasoning_content"), model=model)
             return text
         except urllib.error.HTTPError as e:
             detail = e.read()[:800].decode("utf-8", "replace")
@@ -75,11 +76,20 @@ def chat(messages, role, tag, temperature=0.7, max_tokens=8192, timeout=600):
     raise RuntimeError(f"Crusoe call failed ({role}): {last_err}")
 
 
-def trace(tag, role, messages, reply, usage, seconds, reasoning, error=None):
+def role_model(role):
+    """Per-role model from harness/config.json; CRUSOE_MODEL is the fallback."""
+    try:
+        with open(os.path.join(ROOT, "harness", "config.json")) as f:
+            return json.load(f).get("models", {}).get(role)
+    except (OSError, ValueError):
+        return None
+
+
+def trace(tag, role, messages, reply, usage, seconds, reasoning, error=None, model=None):
     os.makedirs(TRACE_DIR, exist_ok=True)
     path = os.path.join(TRACE_DIR, f"{tag}-{role}-{int(time.time())}.json")
     with open(path, "w") as f:
-        json.dump({"role": role, "model": os.environ.get("CRUSOE_MODEL"), "seconds": round(seconds, 1), "usage": usage,
+        json.dump({"role": role, "model": model or os.environ.get("CRUSOE_MODEL"), "seconds": round(seconds, 1), "usage": usage,
                    "error": error, "messages": messages, "reasoning": reasoning, "reply": reply}, f, indent=1)
 
 
@@ -110,7 +120,16 @@ def extract_json(text):
 
 
 def extract_edits(text):
-    """SEARCH/REPLACE blocks (Aider style) -> [(search, replace)]."""
+    """SEARCH/REPLACE blocks (Aider style) -> [(search, replace)]. Falls back to a JSON "edits" list."""
+    edits = _block_edits(text)
+    if edits:
+        return edits
+    meta = extract_json(text) or {}
+    return [(e["search"], e.get("replace", "")) for e in meta.get("edits") or []
+            if isinstance(e, dict) and isinstance(e.get("search"), str)]
+
+
+def _block_edits(text):
     edits, mode, search, replace = [], None, [], []
     for line in strip_thinking(text).splitlines():
         marker = line.strip()

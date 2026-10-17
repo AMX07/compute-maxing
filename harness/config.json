@@ -1,0 +1,7 @@
+{
+  "models": {
+    "planner": "deepseek-ai/DeepSeek-V4-Pro",
+    "fixer": "deepseek-ai/DeepSeek-V4-Pro",
+    "reflector": "deepseek-ai/Deepseek-V4-Flash"
+  }
+}
