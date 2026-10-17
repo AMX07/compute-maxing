@@ -424,6 +424,7 @@ function renderDetail() {
           ${idea.title ? `<h3>${esc(idea.title)}</h3>` : ""}
           ${idea.rationale ? `<p>${esc(idea.rationale)}</p>` : ""}
           ${predictionHtml(idea)}
+          ${Array.isArray(idea.agents) && idea.agents.length ? `<p class="agents-line">Spawned ${idea.agents.length} sub-agent${idea.agents.length > 1 ? "s" : ""}: ${idea.agents.map((g) => esc(g.role)).join(" · ")}</p>` : ""}
           ${sources.length ? `<ul>${sources.map((u) => `<li><a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u.replace(/^https?:\/\//, ""))}</a></li>`).join("")}</ul>` : ""}
         </div>` : ""}
         ${facts.length ? `<dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>` : ""}
@@ -553,7 +554,15 @@ function select(key, byUser = true) {
 function renderPlaybook() {
   const el = $("#view-playbook");
   if (state.view !== "playbook" || !state.data) return;
-  const lessons = (state.data.harness && state.data.harness.lessons) || [];
+  const h = state.data.harness || {};
+  const lessons = h.lessons || [];
+  if (h.design === "agentic" || (!lessons.length && h.notes)) {
+    el.innerHTML = `<section class="panel playbook">
+      <div class="panel-head"><h2>Orchestrator notes <span class="sub">the model-driven design keeps its own memory; it rewrites these notes when it chooses to</span></h2></div>
+      ${h.notes ? `<pre class="notes">${esc(h.notes)}</pre>` : `<div class="empty-state"><div><h3>No notes yet</h3><p>The orchestrator writes notes here when it decides they are worth keeping.</p></div></div>`}
+    </section>`;
+    return;
+  }
   el.innerHTML = `<section class="panel playbook">
     <div class="panel-head"><h2>Playbook <span class="sub">lessons the loop has learned, rewritten by the reflector after every experiment</span></h2></div>
     ${lessons.length ? `<ol class="lessons">${lessons.map((l) => `<li><span class="l-id">${esc(l.id)}</span><span class="l-text">${esc(l.text)}</span>

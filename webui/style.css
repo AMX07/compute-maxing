@@ -291,6 +291,8 @@ select {
 .pred b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink); }
 .pred b.good { color: var(--keep-ink); }
 .pred-check { font-style: italic; }
+.agents-line { font-size: 0.82rem; color: var(--accent); }
+.notes { margin: 0; padding: 0.8rem 1rem 1rem; white-space: pre-wrap; font: 0.95rem/1.55 var(--font-mono); max-width: 80rem; }
 .playbook-view { min-height: 0; display: grid; }
 .playbook { overflow-y: auto; padding-bottom: 1rem; }
 .lessons { list-style: none; margin: 0; padding: 0.6rem 1rem 0; display: grid; gap: 0.2rem; max-width: 70rem; }

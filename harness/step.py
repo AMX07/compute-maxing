@@ -608,6 +608,11 @@ def finish_artifacts(res, meta, outcome, parent_commit, exp_commit):
 
 def run_baseline(state, budget):
     log("no results yet: running the unmodified train.py as the baseline")
+    # A new workspace's files must be in git before anything can be restored from best_commit.
+    files = [wsp.rel(os.path.join(WS, f)) for f in ("train.py", "prepare.py", "inference.py", "program.md", "workspace.json")
+             if os.path.exists(os.path.join(WS, f))]
+    commit(f"workspace {os.path.basename(WS)}: baseline files\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>", files)
+    state["frozen"] = {p: sha(p) for p in FROZEN}
     set_status("training", 0, "Baseline")
     res = run_training()
     head = git("rev-parse", "HEAD")

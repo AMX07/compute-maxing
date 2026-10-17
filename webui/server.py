@@ -178,15 +178,28 @@ def build_state(root):
         counts[e["status"]] = counts.get(e["status"], 0) + 1
     prompt = next((e["metrics"].get("prompt") for e in list(reversed(experiments)) + pending
                    if e.get("metrics") and e["metrics"].get("prompt")), None)
-    status = read_json(os.path.join(root, "harness", "traces", "status.json"))
+    # A workspace keeps traces/ and memory/ at its top level; the older layout kept them under harness/.
+    def first(*parts_list):
+        for parts in parts_list:
+            path = os.path.join(root, *parts)
+            if os.path.exists(path):
+                return path
+        return os.path.join(root, *parts_list[0])
+    status = read_json(first(("traces", "status.json"), ("harness", "traces", "status.json")))
     if not isinstance(status, dict) or time.time() - status.get("since", 0) > 20 * 60:
         status = None  # stale: the loop isn't running
-    book = read_json(os.path.join(root, "harness", "memory", "playbook.json"))
+    book = read_json(first(("memory", "playbook.json"), ("harness", "memory", "playbook.json")))
     lessons = book.get("lessons", []) if isinstance(book, dict) else []
+    try:
+        with open(os.path.join(root, "memory", "notes.md")) as f:
+            notes = f.read()
+    except OSError:
+        notes = ""
+    design = (read_json(os.path.join(root, "workspace.json")) or {}).get("design")
     return {
         "root": os.path.abspath(root),
         "server_time": time.time(),
-        "harness": {"status": status, "lessons": lessons},
+        "harness": {"status": status, "lessons": lessons, "notes": notes, "design": design},
         "prompt": prompt,
         "experiments": experiments,
         "pending": pending,
@@ -251,7 +264,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser(description="Serve the autoresearch presentation UI.")
-    ap.add_argument("--root", default=os.path.dirname(HERE), help="project root with results.tsv and runs/ (default: parent of webui/)")
+    ap.add_argument("--root", default=os.path.join(os.path.dirname(HERE), "workspaces", "fixed"),
+                    help="a workspace with results.tsv and runs/ (default: workspaces/fixed)")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to reach it from another device")
     args = ap.parse_args()
