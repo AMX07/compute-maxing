@@ -190,7 +190,7 @@ PATCH_SIZE = 4          # 32x32 image -> 8x8 = 64 tokens
 TEXT_LAYERS = 2         # text encoder depth
 
 # Optimization
-BATCH_SIZE = 128        # images per optimizer step
+BATCH_SIZE = 256        # images per optimizer step
 LEARNING_RATE = 1e-3    # AdamW peak learning rate
 WEIGHT_DECAY = 0.0      # AdamW weight decay
 ADAM_BETAS = (0.9, 0.95) # Adam beta1, beta2
