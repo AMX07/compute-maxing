@@ -1,5 +1,5 @@
 {
-  "next_id": 8,
+  "next_id": 9,
   "lessons": [
     {
       "id": "L1",
@@ -42,6 +42,12 @@
       "text": "Removing warmup (constant LR) regresses val_loss ~0.7% vs baseline; warmup is protective in short runs (exp 6)",
       "since": 6,
       "updated": 6
+    },
+    {
+      "id": "L8",
+      "text": "Lowering AdamW beta2 from 0.99 to 0.95 gives negligible val_loss change (-0.06%), not the predicted -0.8%; optimizer adaptation is not a bottleneck (exp 7)",
+      "since": 7,
+      "updated": 7
     }
   ]
 }

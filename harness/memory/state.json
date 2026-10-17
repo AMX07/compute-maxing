@@ -1,7 +1,7 @@
 {
-  "best_commit": "40fc0016647ed39675e285a9c7c9739272625979",
-  "best_val_loss": 0.18282,
-  "consecutive_discards": 1,
+  "best_commit": "56759ae186abe1cf8aa19066eb66363eefe56d79",
+  "best_val_loss": 0.182714,
+  "consecutive_discards": 0,
   "frozen": {
     "prepare.py": "1933e4d4bcb9add56d491efb6aa949d888527fc14f0bd99c1cb90369eb9ffb35",
     "inference.py": "b2e01380e6aa3b409a442ce9b9a3340fa5f4643734b4046b9776f84405a79c56"
@@ -89,6 +89,19 @@
       "run_id": "20261017-141745",
       "commit": "d7b8dc5",
       "prediction_check": "Predicted -1.5% improvement but got +0.69% regression; removing warmup hurt, likely due to early instability or lost warmup benefit."
+    },
+    {
+      "n": 7,
+      "title": "Reduce beta2 to 0.95",
+      "category": "optimizer",
+      "status": "keep",
+      "idea_id": null,
+      "val_loss": 0.182714,
+      "prediction_pct": -0.8,
+      "actual_pct": -0.058,
+      "run_id": "20261017-141954",
+      "commit": "56759ae",
+      "prediction_check": "Outcome was far weaker than predicted (-0.06% vs -0.8%), suggesting beta2 reduction has minimal effect within this short run."
     }
   ]
 }
