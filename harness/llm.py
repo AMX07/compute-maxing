@@ -39,6 +39,10 @@ def config():
     missing = [k for k, v in cfg.items() if not v]
     if missing:
         raise SystemExit(f"Missing {', '.join(missing)}. Put them in {os.path.join(ROOT, '.env')} (see .env.example).")
+    if not cfg["CRUSOE_BASE_URL"].startswith("http") and cfg["CRUSOE_API_KEY"].startswith("http"):
+        cfg["CRUSOE_API_KEY"], cfg["CRUSOE_BASE_URL"] = cfg["CRUSOE_BASE_URL"], cfg["CRUSOE_API_KEY"]  # swapped in .env
+    if not cfg["CRUSOE_BASE_URL"].startswith("http"):
+        raise SystemExit("CRUSOE_BASE_URL in .env must be a URL starting with https:// (value not shown).")
     return cfg
 
 
