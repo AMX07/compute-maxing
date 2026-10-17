@@ -9,7 +9,9 @@ Check only whether the code does what the idea says. Do NOT judge whether the id
 - Likely crashes: shape or dtype mismatches, MLX APIs that don't exist, a missing import.
 - Broken time accounting or anything that would make training run past the budget.
 
-Be decisive and concrete. Flag only real problems you can point to in the diff, not style.
+You also get the full file after the edit. Check imports and definitions there before claiming something is missing or undefined.
+
+Be decisive and concrete. Flag only real problems you can point to in the code, not style.
 
 Reply with only this JSON:
 

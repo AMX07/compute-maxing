@@ -344,11 +344,12 @@ def code_diff(old, new):
     return "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), "a/train.py", "b/train.py", n=3))
 
 
-def review(meta, diff, n):
+def review(meta, diff, n, new_src=""):
     """A second model call checks that the diff implements the idea before a 2-minute run is spent on it."""
     messages = [{"role": "system", "content": read(os.path.join(PROMPTS, "reviewer.md"))},
                 {"role": "user", "content": f"## The idea\n\n{json.dumps({k: meta.get(k) for k in ('title', 'description', 'rationale')}, indent=1)}"
-                                            f"\n\n## The diff\n\n```diff\n{diff}\n```"}]
+                                            f"\n\n## The diff\n\n```diff\n{diff}\n```"
+                                            f"\n\n## The full train.py after the edit (for context: imports, definitions)\n\n```python\n{new_src}\n```"}]
     try:
         reply = llm.chat(messages, "reviewer", f"exp{n:03d}", temperature=0.1, max_tokens=4096, model=REVIEWER_MODEL)
         return llm.extract_json(reply) or {"ok": True}
@@ -374,7 +375,7 @@ def propose(state, src, lessons, n):
         if not meta.get("description"):
             problems.append("the JSON block with title/description/prediction is missing")
         if not problems:
-            verdict = review(meta, code_diff(src, new_src), n)
+            verdict = review(meta, code_diff(src, new_src), n, new_src)
             if verdict.get("ok") is False and attempt < 2:
                 problems.append(f"a reviewer found a bug: {verdict.get('bug')} Hint: {verdict.get('fix_hint')}")
                 log(f"reviewer flagged: {verdict.get('bug')}")
