@@ -18,12 +18,12 @@ python3 harness/run.py --until 16:15
 
 Each experiment runs in a fresh process, and all state lives in files. A crash costs one iteration, and edits to the prompts or code take effect on the next one.
 
-1. **Plan:** the planner (`prompts/planner.md`) reads `program.md`, the playbook, the experiment log with past predictions, and the current best `train.py`. It replies with an idea (title, category, rationale, a predicted val_loss change) and SEARCH/REPLACE edits.
-2. **Review and apply:** the edits must match exactly and pass the guards below. A reviewer (`prompts/reviewer.md`) then checks that the diff actually implements the idea; it looks for inverted schedules, sign errors, no-ops and likely crashes. A rejected reply gets up to two retries with the reason. Then `train.py` is committed as `exp N: ...`. The reviewer was added after experiment 1, whose cosine schedule was inverted and taught the loop a false lesson.
+1. **Plan:** the planner (`prompts/planner.md`) reads `program.md`, the playbook, the experiment log with past predictions, the idea bank and the current best `train.py`. It replies with an idea (title, category, rationale, a predicted val_loss change), a `self_check`, and SEARCH/REPLACE edits. In the `self_check`, the planner states values its code produces at key points, traced by hand (e.g. "lr multiplier at progress 0 / 0.5 / 1.0 = 0 / 1 / 0").
+2. **Apply:** the edits must match exactly and pass the guards below. A rejected reply gets up to two retries with the reason. Then `train.py` is committed as `exp N: ...`.
 3. **Run:** `uv run train.py > run.log`, killed after 6 minutes. On a crash, the fixer (`prompts/fixer.md`) gets one repair attempt with the end of the log.
 4. **Decide:** code decides, not the model. The change is kept if val_loss beats the best so far; otherwise `train.py` is reverted with a new commit. History only moves forward, so discarded ideas stay in git.
 5. **Log:** the row is appended to `results.tsv`, and `idea.json` (idea, prediction, outcome) and `change.diff` are written into `runs/<run_id>/` for the web UI.
-6. **Reflect:** the reflector (`prompts/reflector.md`) reads the diff that ran and compares the prediction with the outcome. If the code didn't implement the idea, it records a lesson about the bug rather than the idea. It makes at most 3 itemized changes to the playbook (`memory/playbook.json`, also rendered as `playbook.md`), and code merges them.
+6. **Reflect:** the reflector (`prompts/reflector.md`) reads the diff that ran, checks it against the planner's `self_check`, and compares the prediction with the outcome. If the code didn't implement the idea, it records a lesson about the bug rather than the idea. It makes at most 3 itemized changes to the playbook (`memory/playbook.json`, also rendered as `playbook.md`), and code merges them.
 
 ## The evaluator stays outside the loop
 
@@ -31,7 +31,12 @@ These checks are enforced in code, not by asking the model:
 
 - `prepare.py` and `inference.py` are hashed when the loop starts. If either changes, the loop refuses to run.
 - An edit is rejected if it redefines or reassigns anything imported from `prepare` (`TIME_BUDGET`, `evaluate_loss`, ...), reads the test split, removes the final `evaluate_loss`/`save_run` calls, or lowers `CAPTION_DROPOUT` below 0.1. A lower dropout improves val_loss but breaks classifier-free guidance.
+- An edit is rejected if it reads a name that is never defined or imported anywhere in the file (a missing import, a typo), or uses an MLX function, class or module that doesn't exist in the installed MLX. MLX paths are resolved in the project's venv and cached in `traces/mlx_api_cache.json`.
 - A run is discarded if training takes more than the time budget plus 100 s of wall clock, or if sampling takes more than 120 s.
+
+### Why there is no reviewer agent
+
+From experiment 3 to 13, a separate reviewer model checked every diff before it ran. In 17 live reviews it made no confirmed catches and 5 confirmed false flags. Two said "`math` is not imported" when it was, and three called correct MLX async code a race. One of those false flags became a false lesson in the playbook. It also missed the one real bug, a memory leak in the EMA change. It was replaced by two things: the planner's `self_check`, which targets the bug class the reviewer did catch in a replay (an inverted schedule), and the code checks above, which answer "is it defined?" with certainty.
 
 ## Files
 

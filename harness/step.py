@@ -13,7 +13,7 @@ experiment is reverted with a new commit, so nothing is lost and other uncommitt
 """
 
 import ast
-import difflib
+import builtins
 import hashlib
 import json
 import os
@@ -48,7 +48,6 @@ SAMPLE_LIMIT = 120               # seconds allowed for the 16 benchmark images
 MIN_CAPTION_DROPOUT = 0.1
 MAX_LESSONS = 25
 STUCK_AFTER = 4                  # discards in a row before the planner is told to switch category
-REVIEWER_MODEL = "deepseek-ai/DeepSeek-V4-Pro"
 
 
 def log(msg):
@@ -232,6 +231,86 @@ def check_frozen(state):
                          "Restore them, or delete harness/memory/state.json to accept the new versions deliberately.")
 
 
+MLX_CACHE = os.path.join(ROOT, "harness", "traces", "mlx_api_cache.json")
+EXTRA_GLOBALS = {"__file__", "__name__", "__doc__", "__spec__", "__builtins__", "__annotations__"}
+
+
+def undefined_names(tree):
+    """Names that are read somewhere but never bound anywhere in the file (a missing import, a typo).
+    Deliberately loose about scope, so it never flags valid code; it only catches names that exist nowhere."""
+    if any(isinstance(n, ast.ImportFrom) and any(a.name == "*" for a in n.names) for n in ast.walk(tree)):
+        return []
+    bound = set(dir(builtins)) | EXTRA_GLOBALS
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bound.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            bound |= {(a.asname or a.name).split(".")[0] for a in node.names}
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            bound.update(node.names)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            bound.add(node.rest)
+    used = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id not in bound:
+            used.setdefault(node.id, node.lineno)
+    return sorted(used.items(), key=lambda kv: kv[1])
+
+
+def mlx_chains(tree):
+    """Dotted MLX paths the code relies on, e.g. 'mlx.core.fast.scaled_dot_product_attention'."""
+    aliases, chains = {}, set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name.split(".")[0] == "mlx":
+                    aliases[a.asname or "mlx"] = a.name if a.asname else "mlx"
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "mlx":
+            chains |= {f"{node.module}.{a.name}" for a in node.names if a.name != "*"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            parts, cur = [], node
+            while isinstance(cur, ast.Attribute):
+                parts.append(cur.attr)
+                cur = cur.value
+            if isinstance(cur, ast.Name) and cur.id in aliases:
+                chains.add(".".join([aliases[cur.id]] + parts[::-1]))
+    return chains
+
+
+def missing_mlx_apis(tree):
+    """MLX functions/classes used by train.py that don't exist in the installed MLX (a hallucinated API).
+    Resolved once per path in the project's venv and cached; if MLX can't be inspected, nothing is flagged."""
+    chains = mlx_chains(tree)
+    cache = load_json(MLX_CACHE, {})
+    unknown = sorted(c for c in chains if c not in cache)
+    python = os.path.join(ROOT, ".venv", "bin", "python")
+    if unknown and os.path.exists(python):
+        probe = ("import importlib, json, sys\nout = {}\nfor chain in json.loads(sys.argv[1]):\n"
+                 "    parts, obj, rest = chain.split('.'), None, []\n"
+                 "    for i in range(len(parts), 0, -1):\n"
+                 "        try:\n            obj, rest = importlib.import_module('.'.join(parts[:i])), parts[i:]\n            break\n"
+                 "        except Exception:\n            continue\n"
+                 "    ok = obj is not None\n    for p in rest:\n        if not hasattr(obj, p):\n            ok = False\n            break\n"
+                 "        obj = getattr(obj, p)\n    out[chain] = ok\nprint(json.dumps(out))\n")
+        try:
+            r = subprocess.run([python, "-c", probe, json.dumps(unknown)], cwd=ROOT, capture_output=True, text=True, timeout=60)
+            cache.update(json.loads(r.stdout.strip().splitlines()[-1]))
+            save_json(MLX_CACHE, cache)
+        except Exception as e:  # noqa: BLE001  can't inspect MLX: don't block the experiment
+            log(f"MLX API check skipped: {e}")
+            return []
+    return sorted(c for c in chains if cache.get(c) is False)
+
+
 def validate(src):
     """Problems that disqualify an edited train.py before it runs."""
     try:
@@ -239,6 +318,10 @@ def validate(src):
     except SyntaxError as e:
         return [f"SyntaxError at line {e.lineno}: {e.msg}"]
     problems = []
+    for name, line in undefined_names(tree):
+        problems.append(f"`{name}` is used (line {line}) but never defined or imported")
+    for chain in missing_mlx_apis(tree):
+        problems.append(f"`{chain}` does not exist in the installed MLX")
     imported = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module in ("prepare", "inference"):
@@ -413,27 +496,8 @@ def planner_messages(state, src, lessons, n):
             {"role": "user", "content": "\n\n".join(parts)}]
 
 
-def code_diff(old, new):
-    return "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), "a/train.py", "b/train.py", n=3))
-
-
-def review(meta, diff, n, new_src=""):
-    """A second model call checks that the diff implements the idea before a 2-minute run is spent on it."""
-    messages = [{"role": "system", "content": read(os.path.join(PROMPTS, "reviewer.md"))},
-                {"role": "user", "content": f"## The idea\n\n{json.dumps({k: meta.get(k) for k in ('title', 'description', 'rationale')}, indent=1)}"
-                                            f"\n\n## The diff\n\n```diff\n{diff}\n```"
-                                            f"\n\n## The full train.py after the edit (for context: imports, definitions)\n\n```python\n{new_src}\n```"}]
-    try:
-        reply = llm.chat(messages, "reviewer", f"exp{n:03d}", temperature=0.1, max_tokens=4096, model=REVIEWER_MODEL)
-        return llm.extract_json(reply) or {"ok": True}
-    except Exception as e:  # a failed review never blocks an experiment
-        log(f"reviewer failed: {e}")
-        return {"ok": True}
-
-
 def propose(state, src, lessons, n):
-    """Planner call. A reply is retried (up to 2 times) if the edit can't be applied, breaks a rule, or the
-    reviewer finds a bug in it."""
+    """Planner call. A reply is retried (up to 2 times) if the edit can't be applied or breaks a rule."""
     messages = planner_messages(state, src, lessons, n)
     for attempt in range(3):
         reply = llm.chat(messages, "planner", f"exp{n:03d}", temperature=0.7)
@@ -447,15 +511,10 @@ def propose(state, src, lessons, n):
             problems = [str(e)]
         if not meta.get("description"):
             problems.append("the JSON block with title/description/prediction is missing")
+        if not meta.get("self_check"):
+            problems.append('the JSON needs "self_check": concrete values your code produces at key points')
         if not problems:
-            verdict = review(meta, code_diff(src, new_src), n, new_src)
-            if verdict.get("ok") is False and attempt < 2:
-                problems.append(f"a reviewer found a bug: {verdict.get('bug')} Hint: {verdict.get('fix_hint')}")
-                log(f"reviewer flagged: {verdict.get('bug')}")
-            else:
-                if verdict.get("ok") is False:
-                    meta["review_flag"] = verdict.get("bug")
-                return meta, new_src
+            return meta, new_src
         log(f"planner reply rejected: {problems}")
         messages += [{"role": "assistant", "content": reply},
                      {"role": "user", "content": "Your reply could not be used:\n- " + "\n- ".join(problems)
@@ -485,8 +544,6 @@ def fix(src, meta, res, n):
 
 
 def reflect(meta, outcome, lessons, n, diff=""):
-    # The reviewer's flag is an unverified opinion (it has been wrong); the reflector judges from the diff itself.
-    meta = {k: v for k, v in meta.items() if k != "review_flag"}
     messages = [{"role": "system", "content": read(os.path.join(PROMPTS, "reflector.md"))},
                 {"role": "user", "content": f"## Playbook\n\n{render_playbook(lessons)}\n\n## Experiment #{n}\n\n"
                                             f"Idea and prediction:\n{json.dumps(meta, indent=1)}\n\nThe code change that actually ran:\n"
@@ -553,7 +610,7 @@ def main():
     set_status("planning", n)
     meta, new_src = propose(state, src, lessons, n)
     if meta is None:
-        log("planner failed twice; skipping this iteration")
+        log("planner failed 3 times; skipping this iteration")
         return 2
     desc = re.sub(r"\s+", " ", str(meta.get("description", meta.get("title", "experiment")))).strip()[:100]
     log(f"idea: {meta.get('title')} [{meta.get('category')}] predicted {meta.get('prediction', {}).get('delta_pct')}%")

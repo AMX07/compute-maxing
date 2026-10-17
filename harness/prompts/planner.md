@@ -19,6 +19,7 @@ How to choose:
 - Prefer ideas with a clear mechanism for lowering val_loss within 2 minutes: learning rate and schedule, batch size vs throughput, model shape (width/depth/patch size/heads), optimizer, precision, normalization and initialization, conditioning.
 - One idea per experiment, so the result is attributable. Keep the edit small enough to be correct.
 - Make a falsifiable prediction. The loop scores your predictions afterwards.
+- Before replying, trace your edited code by hand at a few key points and write the values in `self_check`. If a value isn't what the idea intends (a schedule that rises instead of decaying, a flag that is never read), fix the code first. Past experiments wasted runs on exactly this: an inverted cosine schedule.
 
 Reply in exactly this format:
 
@@ -30,7 +31,8 @@ Reply in exactly this format:
   "rationale": "2-3 sentences: the mechanism, and why it should lower val_loss in a 2-minute run",
   "prediction": {"delta_pct": -1.0, "confidence": "low|medium|high", "risk": "what could go wrong"},
   "sources": ["optional URLs of papers or code this comes from"],
-  "idea_id": "the idea bank id you implemented (e.g. I3), or null"
+  "idea_id": "the idea bank id you implemented (e.g. I3), or null",
+  "self_check": ["2-4 concrete values your edited code produces, traced by hand, e.g. 'lr multiplier at progress 0 / 0.5 / 0.85 / 1.0 = 0 / 1 / 0.5 / 0', 'tokens per image = 256 (patch 2)', 'params about 18M'"]
 }
 ```
 
