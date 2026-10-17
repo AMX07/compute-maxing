@@ -1,0 +1,11 @@
+{
+  "next_id": 2,
+  "lessons": [
+    {
+      "id": "L1",
+      "text": "Baseline: val_loss 0.1838 in 2719 steps at 11.48M params (exp 0)",
+      "since": 0,
+      "updated": 0
+    }
+  ]
+}
