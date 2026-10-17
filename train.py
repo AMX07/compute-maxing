@@ -267,6 +267,7 @@ def main():
     def update_ema():
         for k, v in tree_flatten(model.trainable_parameters()):
             ema_state[k] = ema_decay * ema_state[k] + (1 - ema_decay) * v
+        mx.eval(ema_state)
 
     @partial(mx.compile, inputs=state, outputs=state)
     def train_step(x, tokens):
