@@ -1,5 +1,5 @@
 {
-  "next_id": 7,
+  "next_id": 8,
   "lessons": [
     {
       "id": "L1",
@@ -21,9 +21,9 @@
     },
     {
       "id": "L4",
-      "text": "A correct cosine warmdown over the last 30% matched the linear warmdown (+0.09%, within noise): warmdown shape is not a lever here (exp 3, human review)",
+      "text": "Warmdown shape is not a lever (cosine vs linear within noise), but warmup removal hurts ~0.7%; keep warmup (exp 3, 6)",
       "since": 3,
-      "updated": 3
+      "updated": 6
     },
     {
       "id": "L5",
@@ -36,6 +36,12 @@
       "text": "Removing text encoder for learned embedding improves val_loss ~0.5% via +12% steps; conditioning quality loss is minor on CIFAR-10 (exp 5)",
       "since": 5,
       "updated": 5
+    },
+    {
+      "id": "L7",
+      "text": "Removing warmup (constant LR) regresses val_loss ~0.7% vs baseline; warmup is protective in short runs (exp 6)",
+      "since": 6,
+      "updated": 6
     }
   ]
 }
