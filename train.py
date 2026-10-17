@@ -219,6 +219,7 @@ WARMUP_RATIO = 0.05     # fraction of time budget for LR warmup
 WARMDOWN_RATIO = 0.3    # fraction of time budget for LR warmdown
 FINAL_LR_FRAC = 0.0     # final LR as fraction of peak
 CAPTION_DROPOUT = 0.1   # drop the prompt this often, to train the unconditional model for CFG
+EMA_DECAY = 0.999       # exponential moving average decay for eval weights
 
 # Sampling (used by inference.py on the benchmark prompt)
 SAMPLE_STEPS = 32       # Euler steps from noise to image
@@ -259,6 +260,14 @@ def main():
     loss_and_grad = nn.value_and_grad(model, loss_fn)
     state = [model.state, optimizer.state, mx.random.state]
 
+    # EMA weights for evaluation
+    ema_state = {k: mx.array(v) for k, v in tree_flatten(model.trainable_parameters())}
+    ema_decay = EMA_DECAY
+
+    def update_ema():
+        for k, v in tree_flatten(model.trainable_parameters()):
+            ema_state[k] = ema_decay * ema_state[k] + (1 - ema_decay) * v
+
     @partial(mx.compile, inputs=state, outputs=state)
     def train_step(x, tokens):
         loss, grads = loss_and_grad(model, x, tokens)
@@ -280,6 +289,7 @@ def main():
         mx.async_eval(loss, state)
         x, tokens, epoch = next(train_loader)  # load the next batch while the GPU works
         train_loss = loss.item()
+        update_ema()
 
         # Fast fail: abort if loss is exploding or NaN
         if math.isnan(train_loss) or train_loss > 100:
@@ -305,7 +315,8 @@ def main():
 
     print()  # newline after \r training log
 
-    # Final eval
+    # Final eval using EMA weights
+    model.update(ema_state)
     val_loss = evaluate_loss(model)
     peak_memory_gb = mx.get_peak_memory() / 1024 ** 3
     total_seconds = time.time() - t_start
