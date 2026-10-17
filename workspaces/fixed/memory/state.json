@@ -1,5 +1,5 @@
 {
-  "best_commit": "7970f11683529c32e6906d2c95eae66fc2dda666",
+  "best_commit": "9a549af70b5045ac53412b50d680af9bc24c90b3",
   "best_val_loss": 0.17998,
   "consecutive_discards": 3,
   "frozen": {
@@ -168,5 +168,8 @@
       "commit": "24bb92e",
       "prediction_check": "Predicted -0.8% improvement but got +0.14% regression; weight decay 0.01 slightly hurt val_loss, likely due to over-regularization within short budget."
     }
+  ],
+  "notes": [
+    "best_commit moved from 7970f11 to 9a549af when the workspace was created (same train.py content)"
   ]
 }
