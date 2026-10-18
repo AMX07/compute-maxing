@@ -9,7 +9,7 @@ Run the research loop with the agent design of your choice. Each design runs in 
     touch harness/STOP                                      # finish the current experiment, then stop
     HARNESS_FAKE_TRAIN=1 python3 harness/run.py ...         # no GPU: a fake run replaces training (for tests)
 
-A new workspace starts from the root template (the baseline train.py and the frozen prepare.py/inference.py).
+A new workspace starts from the external image template (the baseline train.py and the frozen prepare.py/inference.py).
 """
 
 import argparse

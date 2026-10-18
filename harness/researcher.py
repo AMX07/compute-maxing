@@ -170,7 +170,7 @@ def prompt(section):
 
 def _post(url, body, headers, timeout=60):
     req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
-                                 headers={"Content-Type": "application/json", "User-Agent": "compute-maxing-researcher/0.1", **headers})
+                                 headers={"Content-Type": "application/json", "User-Agent": "turing-researcher/0.1", **headers})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read().decode("utf-8", "replace"), resp.headers.get("Content-Type", "")
 

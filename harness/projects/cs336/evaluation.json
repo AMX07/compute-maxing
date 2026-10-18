@@ -1,0 +1,40 @@
+{
+  "title": "TinyStories validation cross-entropy",
+  "description": "Every 50 training steps, pretrain.py samples 10 validation batches and averages their next-token cross-entropy losses. Each batch contains 200 sequences of 256 tokens. gpt.py computes log-sum-exp minus the target logit, averaged across batch and sequence positions.",
+  "formula": "val_loss = mean over validation batches of mean(logsumexp(logits) − target logit)",
+  "facts": [
+    {
+      "label": "Validation data",
+      "value": "assignment1-basics/out/tinystories_valid.npy"
+    },
+    {
+      "label": "Evaluation frequency",
+      "value": 50,
+      "unit": "training steps"
+    },
+    {
+      "label": "Batches per evaluation",
+      "value": 10
+    },
+    {
+      "label": "Batch size",
+      "value": 200,
+      "unit": "sequences"
+    },
+    {
+      "label": "Sequence length",
+      "value": 256,
+      "unit": "tokens"
+    },
+    {
+      "label": "Token positions per evaluation",
+      "value": 512000
+    },
+    {
+      "label": "Default training length",
+      "value": 2000,
+      "unit": "steps"
+    }
+  ],
+  "note": "The protocol above describes standalone pretraining defaults. Agentic research uses a separate fixed 200-step screening protocol: batch 32, context 256, 10 validation batches every 50 steps, seed 42, identical sampled train/validation windows across candidates. Each research session starts with a fresh baseline and comparison series. These scores are not directly comparable with historical 2,000-step W&B runs. Source and original data remain unchanged."
+}

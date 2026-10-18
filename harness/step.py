@@ -318,8 +318,10 @@ def missing_mlx_apis(tree):
     chains = mlx_chains(tree)
     cache = load_json(MLX_CACHE, {})
     unknown = sorted(c for c in chains if c not in cache)
-    python = os.path.join(ROOT, ".venv", "bin", "python")
-    if unknown and os.path.exists(python):
+    python = next((p for p in (os.path.join(WS, ".venv", "bin", "python"),
+                              os.path.join(wsp.IMAGE_PROJECT, ".venv", "bin", "python"),
+                              os.path.join(ROOT, ".venv", "bin", "python")) if os.path.exists(p)), None)
+    if unknown and python:
         probe = ("import importlib, json, sys\nout = {}\nfor chain in json.loads(sys.argv[1]):\n"
                  "    parts, obj, rest = chain.split('.'), None, []\n"
                  "    for i in range(len(parts), 0, -1):\n"
@@ -328,7 +330,8 @@ def missing_mlx_apis(tree):
                  "    ok = obj is not None\n    for p in rest:\n        if not hasattr(obj, p):\n            ok = False\n            break\n"
                  "        obj = getattr(obj, p)\n    out[chain] = ok\nprint(json.dumps(out))\n")
         try:
-            r = subprocess.run([python, "-c", probe, json.dumps(unknown)], cwd=ROOT, capture_output=True, text=True, timeout=60)
+            r = subprocess.run(["uv", "run", "--no-project", "--python", python, "python", "-c", probe,
+                                json.dumps(unknown)], cwd=ROOT, capture_output=True, text=True, timeout=60)
             cache.update(json.loads(r.stdout.strip().splitlines()[-1]))
             save_json(MLX_CACHE, cache)
         except Exception as e:  # noqa: BLE001  can't inspect MLX: don't block the experiment

@@ -1,0 +1,128 @@
+{
+  "name": "CS336 (copy) · TinyStories pretraining",
+  "entrypoint": "/absolute/path/to/cs336-copy/assignment1-basics/cs336_basics/pretrain.py",
+  "train_command": "uv run --no-sync --env-file /absolute/path/to/cs336-copy/.turing/training.env python -m cs336_basics.pretrain",
+  "source_directory": "/absolute/path/to/cs336-copy/assignment1-basics",
+  "research": {
+    "enabled": true,
+    "source_directory": "/absolute/path/to/cs336-copy/assignment1-basics",
+    "command": [
+      "uv",
+      "run",
+      "--project",
+      "/absolute/path/to/cs336-copy/assignment1-basics",
+      "--no-sync",
+      "python",
+      "-u",
+      "/absolute/path/to/turing/webui/research_runner.py",
+      "--adapter",
+      "cs336",
+      "--source",
+      "/absolute/path/to/cs336-copy/assignment1-basics",
+      "--parameters",
+      "{parameters}",
+      "--output",
+      "{output}"
+    ],
+    "metric": "val_loss",
+    "goal": "min",
+    "objective": "Reduce final TinyStories validation cross-entropy in a fixed 200-step screening run. Explore model dimensions and optimizer hyperparameters. Keep data, sampling seed, train/eval batch size, context length, validation windows and training budget fixed. Prefer one interpretable change per experiment.",
+    "max_experiments": 2,
+    "experiment_timeout_minutes": 10,
+    "parameters": {
+      "num_layers": {
+        "type": "int",
+        "min": 2,
+        "max": 6,
+        "default": 4
+      },
+      "d_model": {
+        "type": "choice",
+        "values": [
+          256,
+          384,
+          512,
+          640
+        ],
+        "default": 512
+      },
+      "num_heads": {
+        "type": "choice",
+        "values": [
+          4,
+          8,
+          16
+        ],
+        "default": 16
+      },
+      "d_ff": {
+        "type": "choice",
+        "values": [
+          672,
+          1024,
+          1344,
+          1536,
+          1792
+        ],
+        "default": 1344
+      },
+      "lr_max": {
+        "type": "float",
+        "min": 0.0001,
+        "max": 0.02,
+        "default": 0.009
+      },
+      "lr_min": {
+        "type": "float",
+        "min": 0.0,
+        "max": 0.005,
+        "default": 0.001
+      },
+      "clip_threshold": {
+        "type": "float",
+        "min": 0.1,
+        "max": 2.0,
+        "default": 1.0
+      }
+    },
+    "fixed_parameters": {
+      "batch_size": 32,
+      "vocab_size": 10000,
+      "context_length": 256,
+      "t": 200,
+      "t_c": 199,
+      "t_w": 10,
+      "eval_every": 50,
+      "eval_batches": 10,
+      "save_every": 200,
+      "seed": 42,
+      "device": "mps"
+    },
+    "readable": [
+      "cs336_basics/pretrain.py",
+      "cs336_basics/gpt.py",
+      "README.md"
+    ],
+    "parameter_components": {
+      "num_layers": "blocks",
+      "d_model": "blocks",
+      "num_heads": "attention",
+      "d_ff": "ffn",
+      "lr_max": "optimizer",
+      "lr_min": "schedule",
+      "clip_threshold": "optimizer"
+    },
+    "protocol_files": [
+      "/absolute/path/to/turing/webui/research_runner.py",
+      "cs336_basics/tokenizer.py",
+      "cs336_basics/__init__.py",
+      "tests/conftest.py",
+      "out/tinystories_vocab.pkl",
+      "out/tinystories_merges.pkl",
+      "out/tinystories_train.npy",
+      "out/tinystories_valid.npy",
+      "pyproject.toml",
+      "uv.lock"
+    ]
+  }
+}

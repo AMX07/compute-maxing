@@ -1,0 +1,276 @@
+{
+  "name": "karpathy/autoresearch · baseline example",
+  "summary": "Source-backed baseline architecture for karpathy/autoresearch commit 500114a035cb63a4fc1829036e064b22870c61b4, the starting model for the exp/H100/mar8 history. This example contains no measured experiments or historical hypotheses.",
+  "metric": {
+    "name": "val_bpb",
+    "goal": "min"
+  },
+  "groups": [
+    {
+      "id": "model",
+      "name": "Model",
+      "flow": true
+    },
+    {
+      "id": "training",
+      "name": "Training"
+    }
+  ],
+  "components": [
+    {
+      "id": "embed",
+      "group": "model",
+      "name": "Token embedding",
+      "baseline": {
+        "label": "8192 vocab × 512 · bf16",
+        "cost": "O(1) lookup",
+        "detail": "BPE vocabulary of 8192 (trained by prepare.py), embedding width = model dim. Init std 1.0."
+      }
+    },
+    {
+      "id": "ve",
+      "group": "model",
+      "name": "Value embeddings",
+      "baseline": {
+        "label": "alternate layers · gate 2σ(32 ch)",
+        "cost": "O(1) lookup per VE layer",
+        "detail": "ResFormer-style value residual: a per-layer token embedding mixed into V with an input-dependent gate per head, on every other layer (the last always included)."
+      }
+    },
+    {
+      "id": "attn",
+      "group": "model",
+      "name": "Attention",
+      "baseline": {
+        "label": "RoPE base 10K · QK-norm · FA3 · full MHA",
+        "cost": "O(T·w·d) per layer",
+        "detail": "Causal self-attention with head dim 128, rotary embeddings (base 10,000), RMS-normed queries and keys, FlashAttention-3, as many KV heads as query heads."
+      }
+    },
+    {
+      "id": "window",
+      "group": "model",
+      "name": "Window pattern",
+      "baseline": {
+        "label": "SSSL · short = ½ context (1024)",
+        "cost": "short layers O(T·T/2)",
+        "detail": "Sliding-window attention per layer: S = half context (1024 tokens), L = full 2048. The last layer is always L."
+      }
+    },
+    {
+      "id": "mlp",
+      "group": "model",
+      "name": "MLP",
+      "baseline": {
+        "label": "4× · ReLU²",
+        "cost": "O(8·d²) per token",
+        "detail": "Two linear layers (d → 4d → d) with squared ReLU, no biases."
+      }
+    },
+    {
+      "id": "residual",
+      "group": "model",
+      "name": "Residual scalars",
+      "baseline": {
+        "label": "resid λ 1.0 · x0 λ 0.1",
+        "cost": "2 scalars per layer",
+        "detail": "Learned per-layer scalars: one scales the residual stream, one mixes the initial embedding x0 back in at every layer."
+      }
+    },
+    {
+      "id": "shape",
+      "group": "model",
+      "name": "Shape",
+      "baseline": {
+        "label": "depth 8 · AR 64 → dim 512 (4 heads)",
+        "cost": "≈6·P FLOPs per token",
+        "detail": "model_dim = depth × ASPECT_RATIO rounded up to a multiple of HEAD_DIM (128). Pre-norm blocks (RMSNorm), attention then MLP."
+      }
+    },
+    {
+      "id": "head",
+      "group": "model",
+      "name": "LM head",
+      "baseline": {
+        "label": "untied · logit softcap 15",
+        "cost": "O(d·V) per token",
+        "detail": "Separate unembedding (init std 0.001); logits squashed with 15·tanh(x/15)."
+      }
+    },
+    {
+      "id": "init",
+      "group": "model",
+      "name": "Initialization",
+      "baseline": {
+        "label": "uniform ±√3/√d · c_proj = 0",
+        "cost": "—",
+        "detail": "Attention and MLP input matrices uniform in ±√3·d^-½; output projections start at zero; embedding std 1.0, lm_head std 0.001, value-embedding gates at zero (neutral)."
+      }
+    },
+    {
+      "id": "muon",
+      "group": "training",
+      "name": "Muon",
+      "baseline": {
+        "label": "LR 0.04 · momentum 0.85→0.95 over 300 steps · ns 5 · β2 0.95",
+        "cost": "5 Newton–Schulz steps",
+        "detail": "Muon with Nesterov momentum and a NorMuon-style second moment for every transformer matrix, grouped by shape."
+      }
+    },
+    {
+      "id": "adamw",
+      "group": "training",
+      "name": "AdamW groups",
+      "baseline": {
+        "label": "β (0.8, 0.95) · emb 0.6 · unemb 0.004 · scalars 0.5",
+        "cost": "O(P) per step",
+        "detail": "AdamW for embeddings, value embeddings, lm_head and the residual scalars; LRs scaled by (d/768)^-½."
+      }
+    },
+    {
+      "id": "wd",
+      "group": "training",
+      "name": "Weight decay",
+      "baseline": {
+        "label": "cautious 0.2 on matrices (→0) · none elsewhere",
+        "cost": "—",
+        "detail": "Cautious weight decay (only where the update and the weight agree in sign) on Muon matrices, decaying linearly to 0 over training. No decay on AdamW groups."
+      }
+    },
+    {
+      "id": "schedule",
+      "group": "training",
+      "name": "LR schedule",
+      "baseline": {
+        "label": "no warmup · 50% warmdown · final 0",
+        "cost": "—",
+        "detail": "Time-based: flat LR, then a linear warmdown over the last half of the 5-minute budget to 0."
+      }
+    },
+    {
+      "id": "batch",
+      "group": "training",
+      "name": "Batch",
+      "baseline": {
+        "label": "524K tokens / step",
+        "cost": "2 micro-batches of 128 × 2048",
+        "detail": "2^19 tokens per optimizer step, sequence length 2048, device batch 128."
+      }
+    },
+    {
+      "id": "seed",
+      "group": "training",
+      "name": "Seed & clipping",
+      "baseline": {
+        "label": "seed 42 · no grad clipping",
+        "cost": "—",
+        "detail": "Fixed seed; gradients are not clipped."
+      }
+    }
+  ],
+  "changes": {},
+  "hypotheses": [],
+  "diagram": {
+    "version": 1,
+    "basis": "Baseline source",
+    "description": "Baseline decoder-only transformer. Each layer mixes the residual stream with the initial normalized embedding, then applies attention and an MLP with separate residual additions. Value embeddings and attention windows modify the attention path; their settings appear below.",
+    "source": {
+      "file": "train.py",
+      "commit": "500114a035cb63a4fc1829036e064b22870c61b4",
+      "symbols": [
+        "GPT.forward",
+        "Block.forward",
+        "CausalSelfAttention.forward"
+      ]
+    },
+    "flow": [
+      {
+        "kind": "input",
+        "title": "Token IDs",
+        "note": "One sequence of tokens enters the model",
+        "tone": "input"
+      },
+      {
+        "component": "embed",
+        "note": "Look up one learned vector per token",
+        "tone": "embedding"
+      },
+      {
+        "kind": "operation",
+        "title": "RMSNorm",
+        "note": "Save this normalized embedding as the initial residual input",
+        "tone": "norm"
+      },
+      {
+        "kind": "repeat",
+        "component": "shape",
+        "title": "Transformer layer",
+        "note": "Each layer has its own weights and residual scalars",
+        "children": [
+          {
+            "component": "residual",
+            "title": "Residual input mixing",
+            "note": "Scale the incoming stream and add a scaled copy of the initial normalized embedding",
+            "tone": "input"
+          },
+          {
+            "kind": "residual",
+            "title": "Attention sublayer",
+            "children": [
+              {
+                "kind": "operation",
+                "title": "RMSNorm",
+                "note": "Normalize before attention",
+                "tone": "norm"
+              },
+              {
+                "component": "attn",
+                "note": "Causal attention; selected layers mix gated token-value embeddings into V, with the configured attention window",
+                "tone": "attention",
+                "title": "Causal self-attention"
+              }
+            ],
+            "tone": "attention"
+          },
+          {
+            "kind": "residual",
+            "title": "MLP sublayer",
+            "children": [
+              {
+                "kind": "operation",
+                "title": "RMSNorm",
+                "note": "Normalize before the MLP",
+                "tone": "norm"
+              },
+              {
+                "component": "mlp",
+                "note": "Expand, apply squared ReLU, then project back to model width",
+                "tone": "ffn",
+                "title": "Squared-ReLU MLP"
+              }
+            ],
+            "tone": "ffn"
+          }
+        ]
+      },
+      {
+        "kind": "operation",
+        "title": "Final RMSNorm",
+        "note": "Normalize the stream before the output projection",
+        "tone": "norm"
+      },
+      {
+        "component": "head",
+        "note": "Project to vocabulary scores, convert to float32, then apply the configured logit softcap",
+        "tone": "head",
+        "title": "LM head + softcap"
+      },
+      {
+        "kind": "output",
+        "title": "Next-token logits",
+        "note": "One score per vocabulary token at each sequence position",
+        "tone": "output"
+      }
+    ]
+  }
+}

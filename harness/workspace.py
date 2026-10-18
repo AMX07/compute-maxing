@@ -3,8 +3,8 @@ Each agent design runs in its own workspace, so no task file, memory or LLM cont
 
     workspaces/<name>/
         workspace.json            {"design": "fixed" | "agentic", "created_at": ...}
-        train.py                  the file the agents edit (starts as the root train.py, the baseline)
-        prepare.py, inference.py  frozen copies of the root files (data, evaluation, benchmark images)
+        train.py                  the file the agents edit (starts as the external image template train.py, the baseline)
+        prepare.py, inference.py  frozen copies of the external image template files (data, evaluation, benchmark images)
         program.md                the research brief; the agentic design gets an extra section
         results.tsv, runs/, run.log
         memory/                   state.json, playbook / notes, ideas.jsonl, agents/ (committed)
@@ -22,9 +22,12 @@ import datetime
 import json
 import os
 import shutil
+import shlex
 import subprocess
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+IMAGE_PROJECT = os.path.abspath(os.path.expanduser(os.environ.get(
+    "TURING_IMAGE_PROJECT", os.path.join(os.path.dirname(ROOT), "autoresearch-image"))))
 DESIGNS = ("fixed", "agentic")
 TEMPLATE = ["train.py", "prepare.py", "inference.py", "program.md"]
 ADDENDA = {"agentic": os.path.join(ROOT, "harness", "designs", "agentic_program.md")}
@@ -55,6 +58,10 @@ def resolve(path=None):
 
 def load_profile(ws):
     profile = dict(PROFILE_DEFAULTS)
+    # Internal image workspaces use the separate image project's dependencies.
+    if os.path.dirname(os.path.abspath(ws)) == os.path.join(ROOT, "workspaces") \
+            and not os.path.exists(os.path.join(ws, "pyproject.toml")):
+        profile["train_command"] = shlex.join(["uv", "run", "--project", IMAGE_PROJECT, "train.py"])
     try:
         with open(os.path.join(ws, "project.json")) as f:
             profile.update(json.load(f))
@@ -102,17 +109,22 @@ def design_of(ws):
 
 
 def create(ws, design):
-    """Set up a new workspace from the root template (the baseline train.py and the frozen files). A folder that
+    """Set up a new workspace from the external image template (the baseline train.py and the frozen files). A folder that
     already has a train.py is an existing project (e.g. a clone of karpathy/autoresearch): it is adopted as it is,
     and only workspace.json, memory/ and traces/ are added."""
     if design not in DESIGNS:
         raise SystemExit(f"unknown design {design!r}; choose one of {', '.join(DESIGNS)}")
     adopt = os.path.exists(os.path.join(ws, "train.py"))
+    if not adopt:
+        missing = [name for name in TEMPLATE if not os.path.isfile(os.path.join(IMAGE_PROJECT, name))]
+        if missing:
+            raise SystemExit(f"Image template missing from {IMAGE_PROJECT}: {', '.join(missing)}. "
+                             "Set TURING_IMAGE_PROJECT to the image project directory.")
     os.makedirs(os.path.join(ws, "memory"), exist_ok=True)
     os.makedirs(os.path.join(ws, "traces"), exist_ok=True)
     if not adopt:
         for name in TEMPLATE:
-            shutil.copyfile(os.path.join(ROOT, name), os.path.join(ws, name))
+            shutil.copyfile(os.path.join(IMAGE_PROJECT, name), os.path.join(ws, name))
     # The design's addendum to program.md: the project's own prompts/<design>_program.md, else (for this repo's
     # template only) harness/designs/<design>_program.md, which describes the image model.
     own = os.path.join(ws, "prompts", f"{design}_program.md")
@@ -132,5 +144,5 @@ def create(ws, design):
             pass
     with open(os.path.join(ws, "workspace.json"), "w") as f:
         json.dump({"design": design, "created_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
-                   "template": "the project's own train.py" if adopt else "root train.py (the baseline)"}, f, indent=2)
+                   "template": "the project's own train.py" if adopt else os.path.join(IMAGE_PROJECT, "train.py")}, f, indent=2)
         f.write("\n")

@@ -134,12 +134,12 @@ def load_ideas(ws):
 
 def baseline_src(ws, exps):
     """The train.py the baseline ran: its run's copy, else the workspace's train.py at the baseline commit, else the
-    root train.py (the template every workspace in this repo starts from; never for an outside project)."""
+    external image template (only for workspaces in this repo)."""
     b = exps[0] if exps else {}
     if b.get("run") and os.path.exists(os.path.join(b["run"], "train.py")):
         return read(os.path.join(b["run"], "train.py"))
     src = git(ws, "show", f"{b['commit']}:./train.py") if b.get("commit") else ""
-    template = read(os.path.join(ROOT, "train.py")) if os.path.dirname(ws) == os.path.join(ROOT, "workspaces") else ""
+    template = read(os.path.join(wsp.IMAGE_PROJECT, "train.py")) if os.path.dirname(ws) == os.path.join(ROOT, "workspaces") else ""
     return src or template or read(os.path.join(ws, "train.py"))
 
 

@@ -27,9 +27,15 @@ import re
 import subprocess
 import sys
 import time
+import threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
+
+sys.path.insert(0, os.path.dirname(__file__))
+import training
+import evaluation
+import research
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css",
@@ -55,6 +61,7 @@ DESIGNS = {
                           ("subagent", "A role the orchestrator invents for one task; runs in parallel")]},
 }
 TRACE_RE = re.compile(r"^exp(\d+)(?:-([a-z]\d+))?-([a-z_]+)-(\d+)\.json$")
+LAUNCH_LOCK = threading.Lock()
 RUNNERS = {}  # workspace path -> Popen of harness/run.py started from the UI
 RUN_FILES = {"samples.png", "trajectory.png", "train.py", "change.diff", "idea.json", "metrics.json"}
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -102,7 +109,7 @@ def read_results(root):
             row.setdefault(k, "")
         row["status"] = row["status"].lower() or "unknown"
         row["val_loss"] = to_float(row["val_loss"])
-        if row["status"] == "crash" or row["val_loss"] == 0:
+        if row["status"] == "crash":
             row["val_loss"] = None
         row["memory_gb"] = to_float(row["memory_gb"])
         if row["run_id"] in ("", "-"):
@@ -129,6 +136,9 @@ def results_metric(root):
     name = ((read_json(os.path.join(root, "architecture.json")) or {}).get("metric") or {}).get("name")
     if isinstance(name, str) and name:
         return name
+    research_config = (read_json(os.path.join(root, "project.json")) or {}).get("research") or {}
+    if research_config.get("enabled") and research_config.get("metric"):
+        return research_config["metric"]
     try:
         with open(os.path.join(root, "results.tsv")) as f:
             head = f.readline().rstrip("\n").split("\t")
@@ -137,6 +147,14 @@ def results_metric(root):
     except OSError:
         pass
     return "val_loss"
+
+
+def results_goal(root):
+    metric = (read_json(os.path.join(root, "architecture.json")) or {}).get("metric") or {}
+    if metric.get("goal") in ("min", "max"):
+        return metric["goal"]
+    config = (read_json(os.path.join(root, "project.json")) or {}).get("research") or {}
+    return config.get("goal", "min") if config.get("enabled") else "min"
 
 
 HASH_RE = re.compile(r"^[0-9a-f]{7,40}$")
@@ -228,6 +246,8 @@ def live_log(root):
 
 def build_state(root, prefix=""):
     rows = read_results(root)
+    arch = read_json(os.path.join(root, "architecture.json"))
+    goal = results_goal(root)
     try:
         run_ids = sorted(d for d in os.listdir(os.path.join(root, "runs"))
                          if RUN_ID_RE.match(d) and os.path.isdir(os.path.join(root, "runs", d)))
@@ -235,17 +255,25 @@ def build_state(root, prefix=""):
         run_ids = []
 
     baseline = rows[0]["val_loss"] if rows else None
-    best = None        # running best over kept rows (lower is better)
+    best = None        # running best over kept rows within the current comparison series
     best_idx = None
     experiments = []
+    previous_group = None
     for i, row in enumerate(rows):
+        group = row.get("comparison_group") or None
+        reset = i > 0 and group != previous_group
+        if reset:
+            best, best_idx = None, None
+        previous_group = group
         info = run_info(root, row["run_id"], prefix) if row["run_id"] and RUN_ID_RE.match(row["run_id"]) else None
         v = row["val_loss"]
         exp = {
             "idx": i, "commit": row["commit"] or None, "status": row["status"], "val_loss": v,
+            "comparison_reset": reset, "comparison_group": group,
             "memory_gb": row["memory_gb"], "run_id": row["run_id"], "description": row["description"],
             "best_before": best,
-            "delta_baseline": (v - baseline) if v is not None and baseline is not None and i > 0 else None,
+            "delta_baseline": (v - baseline) if v is not None and baseline is not None and i > 0
+                              and group == (rows[0].get("comparison_group") or None) else None,
             "delta_best": (v - best) if v is not None and best is not None else None,
         }
         exp.update({k: info[k] for k in ("metrics", "files", "idea", "diff", "started_at")} if info else
@@ -255,7 +283,7 @@ def build_state(root, prefix=""):
             if stats:
                 exp["files"] = {**exp["files"], "change.diff": f"{prefix}/diff/{row['commit']}"}
                 exp["diff"] = stats
-        if row["status"] == "keep" and v is not None and (best is None or v < best):
+        if row["status"] in ("keep", "retime") and v is not None and (best is None or (v > best if goal == "max" else v < best)):
             best, best_idx = v, i
         exp["best_after"] = best
         experiments.append(exp)
@@ -295,11 +323,11 @@ def build_state(root, prefix=""):
     except OSError:
         notes = ""
     design = (read_json(os.path.join(root, "workspace.json")) or {}).get("design")
-    arch = read_json(os.path.join(root, "architecture.json"))
     return {
         "root": os.path.abspath(root),
         "name": project_name(root),
-        "metric": results_metric(root),
+        "metric": results_metric(root), "goal": goal,
+        "evaluation": evaluation.describe(root, results_metric(root), arch),
         "server_time": time.time(),
         "harness": {"status": status, "lessons": lessons, "notes": notes, "design": design},
         "architecture": arch if isinstance(arch, dict) else None,
@@ -378,9 +406,15 @@ def project_card(pid, entry):
     """The landing page's view of a project: name, path, best-so-far curve, and when it last changed."""
     root = entry["path"]
     rows = read_results(root)
+    goal = results_goal(root)
     best, curve = None, []
+    previous_group = None
     for r in rows:
-        if r["status"] == "keep" and r["val_loss"] is not None and (best is None or r["val_loss"] < best):
+        group = r.get("comparison_group") or None
+        if group != previous_group:
+            best = None
+        previous_group = group
+        if r["status"] in ("keep", "retime") and r["val_loss"] is not None and (best is None or (r["val_loss"] > best if goal == "max" else r["val_loss"] < best)):
             best = r["val_loss"]
         curve.append(best)
     mtimes = []
@@ -393,7 +427,7 @@ def project_card(pid, entry):
     live = isinstance(status, dict) and status.get("phase") not in (None, "stopped") and \
         time.time() - status.get("since", 0) < 20 * 60
     return {"id": pid, "name": project_name(root), "path": root, "total": len(rows),
-            "baseline": rows[0]["val_loss"] if rows else None, "best": best, "curve": curve,
+            "baseline": rows[0]["val_loss"] if rows else None, "best": best, "curve": curve, "goal": goal,
             "updated_at": max(mtimes) if mtimes else None, "opened_at": entry.get("opened_at"),
             "has_map": os.path.exists(os.path.join(root, "architecture.json")), "live": bool(live)}
 
@@ -405,6 +439,8 @@ def in_repo(root):
 def managed(root):
     """True if this repo's harness can run the project: one of its workspaces, or an outside project that has been
     set up for it (workspace.json with a design, and usually a project.json saying how to train and score it)."""
+    if (read_json(os.path.join(root, "architecture.json")) or {}).get("history_only"):
+        return False
     design = (read_json(os.path.join(root, "workspace.json")) or {}).get("design")
     return os.path.isdir(HARNESS) and (in_repo(root) or design in DESIGNS)
 
@@ -462,7 +498,11 @@ def agents_state(root):
         designs.append({"id": key, "name": d["name"], "about": d["about"], "roles": roles,
                         "workspace": ws, "exists": os.path.isdir(ws),
                         "project": project_id(ws) if os.path.isdir(ws) else None})
-    return {"managed": managed(root), "design": design, "designs": designs, "status": status,
+    return {"research": research.state(root), "training": training.state(root), "execution_note": ("Use Start training above to reproduce the current code on a configured machine. "
+                               "The autonomous research loop below is not configured for this multi-file trainer."
+                               if (read_json(os.path.join(root, "architecture.json")) or {}).get("history_only")
+                               else (read_json(os.path.join(root, "architecture.json")) or {}).get("execution_note")),
+            "managed": managed(root), "design": design, "designs": designs, "status": status,
             "server_time": time.time(), "running": bool(proc and proc.poll() is None),
             "stop_requested": os.path.exists(STOP_FILE), "calls": calls,
             "log": tail(os.path.join(traces_dir, "loop.log"))}
@@ -477,6 +517,10 @@ def start_loop(root, design, until=None, max_iters=0):
     ws = os.path.abspath(root) if own == design else os.path.join(REPO, "workspaces", design)
     if RUNNERS.get(ws) and RUNNERS[ws].poll() is None:
         raise ValueError("already running")
+    if research.state(ws)["active"]:
+        raise ValueError("Stop this project's agentic research before starting the legacy loop.")
+    if any(job["status"] in training.ACTIVE for job in training.state(ws)["jobs"]):
+        raise ValueError("Stop this project's standalone training job before starting the research loop.")
     cmd = [sys.executable, os.path.join(HARNESS, "run.py"), "--design", design, "--workspace", ws]
     if until:
         if not re.match(r"^\d{1,2}:\d{2}$", until):
@@ -531,6 +575,11 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[:2] == ["api", "p"] and parts[3] == "agents":
                 entry = projects().get(parts[2])
                 return self.json(agents_state(entry["path"])) if entry else self.not_found()
+            if len(parts) == 5 and parts[:2] == ["api", "p"] and parts[3] == "training-log":
+                entry = projects().get(parts[2])
+                if not entry or not re.fullmatch(r"\d{8}-\d{6}-[0-9a-f]{8}", parts[4]):
+                    return self.not_found()
+                return self.serve_file(os.path.join(entry["path"], "training", "runs", parts[4], "run.log"), "no-store")
             if len(parts) == 5 and parts[:2] == ["api", "p"] and parts[3] == "trace" and TRACE_RE.match(parts[4]):
                 entry = projects().get(parts[2])
                 d = read_json(os.path.join(entry["path"], "traces", parts[4])) if entry else None
@@ -573,9 +622,18 @@ class Handler(BaseHTTPRequestHandler):
         parts = path.strip("/").split("/")
         action = parts[3] if len(parts) == 4 and parts[:2] == ["api", "p"] else None
         prompt = parts[2] if len(parts) == 3 and parts[:2] == ["api", "prompts"] else None
-        if path not in ("/api/annotations", "/api/projects") and action not in ("run", "stop") and \
+        if path not in ("/api/annotations", "/api/projects") and action not in ("run", "stop", "training-save", "training-check", "training-start", "training-stop", "research-start", "research-stop") and \
                 not (prompt and os.path.exists(os.path.join(PROMPTS, prompt + ".md"))):
             return self.not_found()
+        if action and action.startswith(("training-", "research-")):
+            # Execution endpoints are only available from the local UI, with same-origin JSON requests.
+            host = self.headers.get("Host", "")
+            origin = self.headers.get("Origin")
+            hostname = urlparse("http://" + host).hostname
+            if self.client_address[0] not in ("127.0.0.1", "::1") or hostname not in ("localhost", "127.0.0.1", "::1") \
+                    or (origin and urlparse(origin).netloc != host) \
+                    or self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+                return self.json({"error": "Execution controls require a same-origin request to the local Turing UI."}, 403)
         length = int(self.headers.get("Content-Length") or 0)
         if not 0 < length <= 1 << 20:
             return self.send(413, b"bad length\n", "text/plain; charset=utf-8")
@@ -590,6 +648,33 @@ class Handler(BaseHTTPRequestHandler):
             with open(os.path.join(PROMPTS, prompt + ".md"), "w") as f:
                 f.write(text)
             return self.json({"ok": True})
+        if action and action.startswith(("training-", "research-")):
+            entry = projects().get(parts[2])
+            if not entry or not isinstance(notes, dict):
+                return self.json({"error": "Project not found or invalid settings."}, 400)
+            root = entry["path"]
+            try:
+                if action == "research-start":
+                    with LAUNCH_LOCK:
+                        if RUNNERS.get(root) and RUNNERS[root].poll() is None:
+                            raise ValueError("Stop this project's legacy research loop first.")
+                        result = research.start(root, notes)
+                elif action == "research-stop":
+                    result = research.stop(root, notes.get("run_id"))
+                elif action == "training-save":
+                    result = {"config": training.save(root, notes.get("config"))}
+                elif action == "training-check":
+                    result = training.check(notes.get("config"))
+                elif action == "training-start":
+                    with LAUNCH_LOCK:
+                        if (RUNNERS.get(root) and RUNNERS[root].poll() is None) or research.state(root)["active"]:
+                            raise ValueError("Stop this project's research loop before launching a standalone training run.")
+                        result = training.start(root, notes.get("config"))
+                else:
+                    result = training.stop(root, notes.get("job_id"))
+                return self.json(result)
+            except (ValueError, OSError) as e:
+                return self.json({"error": str(e)}, 400)
         if action:
             entry = projects().get(parts[2])
             if not entry or not managed(entry["path"]):
@@ -605,7 +690,8 @@ class Handler(BaseHTTPRequestHandler):
             if body.get("design") not in DESIGNS:
                 return self.json({"error": "design must be fixed or agentic"}, 400)
             try:
-                ws = start_loop(entry["path"], body["design"], body.get("until"), body.get("max_iters") or 0)
+                with LAUNCH_LOCK:
+                    ws = start_loop(entry["path"], body["design"], body.get("until"), body.get("max_iters") or 0)
             except ValueError as e:
                 return self.json({"error": str(e)}, 400)
             register(ws, opened=True)

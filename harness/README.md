@@ -5,15 +5,15 @@ Our own agent harness for the autoresearch loop. It replaces "point Claude Code 
 ## Run it
 
 1. Put your Crusoe settings in `.env` at the project root. The file is git-ignored; see `.env.example`.
-2. Check the connection with `python3 -m harness.llm`, which should reply "ready".
+2. Check the connection with `uv run --no-project python -m harness.llm`, which should reply "ready".
 3. Pick a design and start the loop. Leave out `--design` and it asks you.
 
 ```bash
-python3 harness/run.py --design fixed --until 16:15
+uv run --no-project python harness/run.py --design fixed --until 16:15
 ```
 
 ```bash
-python3 harness/run.py --design agentic --until 16:15
+uv run --no-project python harness/run.py --design agentic --until 16:15
 ```
 
 `--until` stops starting new experiments after that local time. `touch harness/STOP` finishes the current experiment and then stops. `--max-iters N` runs N experiments. A new workspace's first iteration runs the unmodified baseline `train.py`. There is one GPU, so run one design at a time.
@@ -29,9 +29,9 @@ python3 harness/run.py --design agentic --until 16:15
 | Task brief | `program.md` | `program.md` plus `designs/agentic_program.md`: one GPU so runs are serial, only thinking parallelizes, and the failure modes past models hit here |
 | Shared code | Edit guards, training, keep/discard by val_loss, logging, git, push (`step.execute` / `step.record`) | Same |
 
-Each design runs in its own workspace, `workspaces/<design>/`. A workspace holds its own `train.py`, frozen copies of `prepare.py` and `inference.py`, `program.md`, `results.tsv`, `runs/`, `run.log`, `memory/` and `traces/`. The harness only reads and writes inside the workspace that `run.py` passes it. The agentic `read_file` action is confined there too, so no task file, memory or LLM context crosses between designs. New workspaces start from the root `train.py`, which is the baseline. `workspaces/fixed/` holds the first 13 experiments, which ran before workspaces existed.
+Each design runs in its own workspace, `workspaces/<design>/`. A workspace holds its own `train.py`, frozen copies of `prepare.py` and `inference.py`, `program.md`, `results.tsv`, `runs/`, `run.log`, `memory/` and `traces/`. The harness only reads and writes inside the workspace that `run.py` passes it. The agentic `read_file` action is confined there too, so no task file, memory or LLM context crosses between designs. New image workspaces start from `../autoresearch-image/train.py` (override the directory with `TURING_IMAGE_PROJECT`). Internal image workspaces use that external project's dependencies via `uv run --project`. `workspaces/fixed/` holds the first 13 experiments, which ran before workspaces existed.
 
-Point the web UI at a workspace: `python3 webui/server.py --root workspaces/agentic --port 8081`. It defaults to `workspaces/fixed`.
+Point the web UI at a workspace: `uv run --no-project python webui/server.py --root workspaces/agentic --port 8081`. It defaults to `workspaces/fixed`.
 
 ### Testing without the GPU
 
@@ -99,10 +99,10 @@ From experiment 3 to 13, a separate reviewer model checked every diff before it 
 `architecture.json` in the workspace is the component map that the web UI's Baseline, Evolution and Current views draw. Its schema is in `webui/README.md`. The harness keeps it up to date: after the baseline and after every experiment, `step.py` runs
 
 ```bash
-python3 harness/map_architecture.py --workspace workspaces/fixed
+uv run --no-project python harness/map_architecture.py --workspace workspaces/fixed
 ```
 
-It reads the baseline `train.py` (the baseline run's copy, else the root `train.py`), `results.tsv`, each run's `idea.json` and `change.diff`, and `memory/` (`state.json`, `playbook.json`, `ideas.jsonl`). The first run asks for the baseline's components, once. Then each experiment not yet in `changes` gets one small call (`prompts/mapper.md`, on the reflector's model) that returns the component it changed (label, after, cost, note), updates to the hypotheses it tested, and the component each new queued idea would change. With nothing new, it makes no call. A failed or timed-out call never costs an experiment: whatever is missing is mapped on the next run. `--dry-run` prints the merged map without writing it.
+It reads the baseline `train.py` (the baseline run's copy, else the external image template's `train.py`), `results.tsv`, each run's `idea.json` and `change.diff`, and `memory/` (`state.json`, `playbook.json`, `ideas.jsonl`). The first run asks for the baseline's components, once. Then each experiment not yet in `changes` gets one small call (`prompts/mapper.md`, on the reflector's model) that returns the component it changed (label, after, cost, note), updates to the hypotheses it tested, and the component each new queued idea would change. With nothing new, it makes no call. A failed or timed-out call never costs an experiment: whatever is missing is mapped on the next run. `--dry-run` prints the merged map without writing it.
 
 Merging only adds, so a hand-written map keeps everything a human wrote. Components, groups, `changes` and `next` only get missing keys, and `tried` only grows. An existing hypothesis keeps its text, its evidence only grows, and its status changes only together with new evidence. Hypotheses the script writes are marked `"auto": true`, and only those can be reworded later. If a merge would drop or rewrite an existing entry, the script refuses to write it.
 
@@ -111,8 +111,8 @@ Merging only adds, so a hand-written map keeps everything a human wrote. Compone
 Part of the fixed design: `run.py --design fixed` starts it as a background process (unless `--no-researcher`), and it keeps the workspace's idea bank, `memory/ideas.jsonl`, stocked for the planner. You.com only retrieves (Search, optionally Contents; never the Research endpoint, which runs You.com's own model). Every LLM call goes to Crusoe through `harness.llm` under the `researcher` role.
 
 ```bash
-HARNESS_WORKSPACE=workspaces/fixed python3 -m harness.researcher --once     # one round
-HARNESS_WORKSPACE=workspaces/fixed python3 -m harness.researcher --loop     # a round whenever fewer than 6 ideas are untried
+HARNESS_WORKSPACE=workspaces/fixed uv run --no-project python -m harness.researcher --once     # one round
+HARNESS_WORKSPACE=workspaces/fixed uv run --no-project python -m harness.researcher --loop     # a round whenever fewer than 6 ideas are untried
 ```
 
 `--max-searches N` caps You.com searches per process (default 40), and `--loop` exits when `harness/STOP` exists. With `YDC_API_KEY` in the environment or `.env`, it uses the REST Search API (`include_domains` arxiv.org, openreview.net, github.com, huggingface.co; highlights, ~3k tokens). Without a key, it uses the keyless MCP endpoint (`you-search`, about 100 queries a day). If search fails, Crusoe proposes ideas from its own knowledge, and those cards are marked `"origin": "model-only"` with no sources. Network errors are logged to `traces/researcher.log` and retried on the next round.
